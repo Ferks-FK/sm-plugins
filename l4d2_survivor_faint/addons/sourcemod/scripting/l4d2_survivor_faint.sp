@@ -22,7 +22,7 @@
 
 Handle g_hApplyAbsVelocityImpulse = null;
 
-#define PLUGIN_VERSION  "1.2.0"
+#define PLUGIN_VERSION  "1.2.1"
 
 // Input flags (L4D2)
 #define IN_ATTACK       (1 << 0)
