@@ -1,4 +1,6 @@
 /**
+ * l4d2_survivor_faint.sp
+ *
  * Port of the VScript mod "Survivor Fainting" to SourceMod.
  * Spawns a prop_ragdoll at the survivor's position and translates
  * WASD/Jump inputs into physics impulses on the ragdoll.
@@ -8,10 +10,10 @@
  *   sm_faintplayer      - (Admin) Toggle faint on another player/bot
  *
  * CVars:
- *   l4d2_faint_impulse_interval - Min interval between movement impulses (default: 0.06s)
- *   l4d2_faint_admins_only      - Restrict sm_faint to admins (0/1)
+ *   l4d2_faint_impulse_interval  - Min interval between movement impulses (default: 0.06s)
+ *   l4d2_faint_admins_only       - Restrict sm_faint to admins (0/1)
+ *   l4d2_faint_require_grounded  - Require player to be on ground to faint (0/1)
  */
-
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -22,7 +24,7 @@
 
 Handle g_hApplyAbsVelocityImpulse = null;
 
-#define PLUGIN_VERSION  "1.2.1"
+#define PLUGIN_VERSION  "1.2.2"
 
 // Input flags (L4D2)
 #define IN_ATTACK       (1 << 0)
@@ -70,9 +72,13 @@ int     g_iWeaponHandEnt[MAXPLAYERS+1] = { INVALID_ENT_REFERENCE, ... }; // acti
 // -----------------------------------------------------------------------
 // CVars
 // -----------------------------------------------------------------------
-
 ConVar  g_cvImpulseInterval;
 ConVar  g_cvAdminsOnly;
+ConVar  g_cvRequireGrounded;
+
+float g_fImpulseInterval;
+bool  g_bAdminsOnly;
+bool  g_bRequireGrounded;
 
 // -----------------------------------------------------------------------
 // Catches ragdoll destruction by the engine fader — ends faint cleanly
@@ -119,13 +125,17 @@ public void OnPluginStart()
     CreateConVar("l4d2_faint_version", PLUGIN_VERSION, "Plugin Version", FCVAR_SPONLY|FCVAR_REPLICATED|FCVAR_NOTIFY);
 
     g_cvImpulseInterval = CreateConVar("l4d2_faint_impulse_interval", "0.06", "Minimum interval between movement impulses (s). Higher = slower.", FCVAR_NOTIFY, true, 0.01);
-    g_cvAdminsOnly   = CreateConVar("l4d2_faint_admins_only",     "0",     "Restrict sm_faint to admins (0/1)",                       FCVAR_NOTIFY, true, 0.0, true, 1.0);
-
+    g_cvAdminsOnly      = CreateConVar("l4d2_faint_admins_only",      "0",    "Restrict sm_faint to admins (0/1)",                                 FCVAR_NOTIFY, true, 0.0, true, 1.0);
+    g_cvRequireGrounded = CreateConVar("l4d2_faint_require_grounded", "1",    "Require players to be on the ground to faint (0/1).",                FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
     AutoExecConfig(true, "l4d2_survivor_faint");
 
-    RegConsoleCmd("sm_faint",      Cmd_Faint,      "Toggle ragdoll on your own survivor");
-    RegAdminCmd  ("sm_faintplayer",Cmd_FaintPlayer, ADMFLAG_GENERIC, "Toggle faint on another player: sm_faintplayer <#userid|name>");
+    g_cvImpulseInterval.AddChangeHook(OnCvarChanged);
+    g_cvAdminsOnly.AddChangeHook(OnCvarChanged);
+    g_cvRequireGrounded.AddChangeHook(OnCvarChanged);
+
+    RegConsoleCmd("sm_faint",       Cmd_Faint,       "Toggle ragdoll on your own survivor");
+    RegAdminCmd  ("sm_faintplayer", Cmd_FaintPlayer, ADMFLAG_GENERIC, "Toggle faint on another player: sm_faintplayer <#userid|name>");
 
     HookEvent("player_hurt",            Event_PlayerHurt);
     HookEvent("player_death",           Event_PlayerDeath);
@@ -134,7 +144,7 @@ public void OnPluginStart()
     HookEvent("charger_carry_start",    Event_ChargerCarryStart);
     HookEvent("map_transition",         Event_MapTransition);
     HookEvent("gameinstructor_nodraw",  Event_IntroCutsceneBegin, EventHookMode_PostNoCopy);
-    HookEvent("gameinstructor_draw",    Event_IntroCutsceneEnd, EventHookMode_PostNoCopy);
+    HookEvent("gameinstructor_draw",    Event_IntroCutsceneEnd,   EventHookMode_PostNoCopy);
 
     // ApplyAbsVelocityImpulse — used to push the ragdoll physics object
     GameData hGameData = new GameData("l4d2_survivor_faint");
@@ -148,6 +158,25 @@ public void OnPluginStart()
     }
     if (g_hApplyAbsVelocityImpulse == null)
         LogMessage("[Faint] SDKCall not available - movement via SetAbsVelocity");
+
+    GetCvars();
+}
+
+void OnCvarChanged(Handle convar, const char[] oldValue, const char[] newValue)
+{
+    GetCvars();
+}
+
+void GetCvars()
+{
+    g_fImpulseInterval = g_cvImpulseInterval.FloatValue;
+    g_bAdminsOnly      = g_cvAdminsOnly.BoolValue;
+    g_bRequireGrounded = g_cvRequireGrounded.BoolValue;
+}
+
+public void OnConfigsExecuted()
+{
+    GetCvars();
 }
 
 public void OnClientDisconnect(int client)
@@ -179,7 +208,7 @@ public void OnMapStart()
         g_fJumpCooldown[i]       = 0.0;
         g_fThinkCooldown[i]      = 0.0;
         g_fMoveCooldown[i]       = 0.0;
-        g_fThinkRate[i]         = 0.0;
+        g_fThinkRate[i]          = 0.0;
         g_fLastRagPos[i][0]      = 0.0;
         g_fLastRagPos[i][1]      = 0.0;
         g_fLastRagPos[i][2]      = 0.0;
@@ -194,7 +223,7 @@ public void OnMapStart()
 Action Cmd_Faint(int client, int args)
 {
     if (client == 0) { ReplyToCommand(client, "[Faint] In-game only."); return Plugin_Handled; }
-    if (g_cvAdminsOnly.BoolValue && !CheckCommandAccess(client, "sm_faint_admin", ADMFLAG_GENERIC))
+    if (g_bAdminsOnly && !CheckCommandAccess(client, "sm_faint_admin", ADMFLAG_GENERIC))
     {
         ReplyToCommand(client, "[Faint] Only admins can use this command.");
         return Plugin_Handled;
@@ -251,7 +280,6 @@ void Event_PlayerHurt(Event event, const char[] name, bool dontBroadcast)
     int victim = GetClientOfUserId(event.GetInt("userid"));
     if (!victim || !IsClientInGame(victim) || !IsSurvivor(victim)) return;
 
-    // Any damage removes the faint
     if (GetRagdoll(victim) != INVALID_ENT_REFERENCE)
         RemoveFaintRagdoll(victim);
 }
@@ -382,7 +410,6 @@ void MainRagdollFunc(int client)
     if (IsGhost(client)) return;
     if (IsIncapacitated(client)) return;
 
-
     if (IsOnMovingPlatform(client))
     {
         ReplyToCommand(client, "[Faint] Cant faint while on a moving platform.");
@@ -396,7 +423,14 @@ void MainRagdollFunc(int client)
     if (GetRagdoll(client) != INVALID_ENT_REFERENCE)
         RemoveFaintRagdoll(client);
     else
+    {
+        if (g_bRequireGrounded && !(GetEntityFlags(client) & FL_ONGROUND))
+        {
+            ReplyToCommand(client, "[Faint] You must be on the ground to faint.");
+            return;
+        }
         CreateFaintRagdoll(client);
+    }
 }
 
 int CreateFaintRagdoll(int client)
@@ -413,7 +447,7 @@ int CreateFaintRagdoll(int client)
     GetClientAbsOrigin(client, origin);
     GetClientEyeAngles(client, angles);
 
-    // Trace downward to find exact floor position — avoids clipping on slopes
+    // Trace downward to find exact floor position — avoids clipping on slopes.
     // Only when grounded; if airborne, use current position as-is to avoid
     // snapping the ragdoll to a floor that may be far below or clipping into a ceiling.
     bool isOnGround = (GetEntityFlags(client) & FL_ONGROUND) != 0;
@@ -471,7 +505,6 @@ int CreateFaintRagdoll(int client)
     GetSurvivorGlowColor(client, glowColor);
     L4D2_SetEntityGlow(rag, L4D2Glow_Unoccluded, 0, 0, glowColor, false);
 
-
     float vel[3];
     GetEntPropVector(client, Prop_Data, "m_vecVelocity", vel);
     SetEntPropFloat(client, Prop_Send, "m_flFallVelocity", 0.0);
@@ -513,16 +546,14 @@ int CreateFaintRagdoll(int client)
     g_iWeaponHandEnt[client]   = INVALID_ENT_REFERENCE;
 
     // Transfer player velocity to ragdoll at spawn
-    {
-        float ragPos[3], ragAng[3];
-        GetEntPropVector(rag, Prop_Send, "m_vecOrigin", ragPos);
-        GetEntPropVector(rag, Prop_Send, "m_angRotation", ragAng);
-        TeleportEntity(rag, ragPos, ragAng, vel);
-    }
+    float ragPos[3], ragAng[3];
+    GetEntPropVector(rag, Prop_Send, "m_vecOrigin", ragPos);
+    GetEntPropVector(rag, Prop_Send, "m_angRotation", ragAng);
+    TeleportEntity(rag, ragPos, ragAng, vel);
 
-    SDKHook(client, SDKHook_PostThink,    Hook_ClientThink);
-    SDKHook(client, SDKHook_WeaponCanUse, WeaponCanUseSwitch);
-    SDKHook(client, SDKHook_WeaponSwitch, WeaponCanUseSwitch);
+    SDKHook(client, SDKHook_PostThink,     Hook_ClientThink);
+    SDKHook(client, SDKHook_WeaponCanUse,  WeaponCanUseSwitch);
+    SDKHook(client, SDKHook_WeaponSwitch,  WeaponCanUseSwitch);
     SDKHook(client, SDKHook_PostThinkPost, Hook_HideAddons);
 
     return rag;
@@ -550,14 +581,13 @@ void RemoveFaintRagdoll(int client)
         return;
     }
 
-    SDKUnhook(client, SDKHook_PostThink,    Hook_ClientThink);
-    SDKUnhook(client, SDKHook_WeaponCanUse, WeaponCanUseSwitch);
-    SDKUnhook(client, SDKHook_WeaponSwitch, WeaponCanUseSwitch);
+    SDKUnhook(client, SDKHook_PostThink,     Hook_ClientThink);
+    SDKUnhook(client, SDKHook_WeaponCanUse,  WeaponCanUseSwitch);
+    SDKUnhook(client, SDKHook_WeaponSwitch,  WeaponCanUseSwitch);
     SDKUnhook(client, SDKHook_PostThinkPost, Hook_HideAddons);
     RestoreClient(client, rag);
 
     CreateTimer(0.05, Timer_KillRagdoll, ragRef);
-
 }
 
 void RestoreClient(int client, int rag)
@@ -591,6 +621,7 @@ void RestoreClient(int client, int rag)
         float ragOrigin[3];
         GetEntPropVector(rag, Prop_Send, "m_vecOrigin", ragOrigin);
 
+        // Don't teleport to ragdoll during intro — engine controls player position
         if (!g_bIntroActive)
         {
             float ragVel[3];
@@ -615,8 +646,8 @@ Action Hook_ClientThink(int client)
     if (rag == INVALID_ENT_REFERENCE)
     {
         RemoveFaintRagdoll(client);
-        SDKUnhook(client, SDKHook_PostThink,     Hook_ClientThink);
-        SDKUnhook(client, SDKHook_PostThinkPost,  Hook_HideAddons);
+        SDKUnhook(client, SDKHook_PostThink,    Hook_ClientThink);
+        SDKUnhook(client, SDKHook_PostThinkPost, Hook_HideAddons);
         return Plugin_Continue;
     }
 
@@ -644,8 +675,7 @@ Action Hook_ClientThink(int client)
         g_fThinkCooldown[client] = now + 0.25;
         DoAttachments(client);
 
-        // Cancel faint if survivor gets grabbed by a special infected
-        // This is a fallback method.
+        // Cancel faint if survivor gets grabbed by a special infected (fallback)
         if (IsPinned(client))
         {
             RemoveFaintRagdoll(client);
@@ -657,7 +687,6 @@ Action Hook_ClientThink(int client)
             RemoveFaintRagdoll(client);
             return Plugin_Continue;
         }
-
 
         if (g_bRagInAir[client])
         {
@@ -710,16 +739,16 @@ Action Hook_ClientThink(int client)
     }
 
     // Sync invisible player position to ragdoll each tick (keeps hitbox aligned).
-    // During intro cinematic the engine force-moves players — skip teleport
+    // During intro cinematic the engine force-moves players — skip teleport to avoid desync.
     if (!g_bIntroActive)
         TeleportEntity(client, curRagPos, NULL_VECTOR, NULL_VECTOR);
 
     if (buttons == 0) return Plugin_Continue;
 
-    bool inFwd  = !!(buttons & IN_FORWARD);
-    bool inBwd  = !!(buttons & IN_BACK);
-    bool inLft  = !!(buttons & IN_MOVELEFT);
-    bool inRgt  = !!(buttons & IN_MOVERIGHT);
+    bool inFwd   = !!(buttons & IN_FORWARD);
+    bool inBwd   = !!(buttons & IN_BACK);
+    bool inLft   = !!(buttons & IN_MOVELEFT);
+    bool inRgt   = !!(buttons & IN_MOVERIGHT);
     bool jumping = !!(buttons & IN_JUMP);
 
     if ((inFwd || inBwd || inLft || inRgt) && MOVE_FORCE > 0.0)
@@ -751,7 +780,7 @@ Action Hook_ClientThink(int client)
 
         if (g_fMoveCooldown[client] > now)
             return Plugin_Continue;
-        g_fMoveCooldown[client] = now + g_cvImpulseInterval.FloatValue;
+        g_fMoveCooldown[client] = now + g_fImpulseInterval;
 
         if (g_hApplyAbsVelocityImpulse != null)
         {
@@ -880,12 +909,12 @@ stock bool L4D2_SetEntityGlow(int entity, L4D2GlowType type, int range, int minR
     if (FindSendPropInfo(netclass, "m_iGlowType") < 1)
         return false;
 
-    SetEntProp(entity, Prop_Send, "m_iGlowType",         type);
-    SetEntProp(entity, Prop_Send, "m_nGlowRange",         range);
-    SetEntProp(entity, Prop_Send, "m_nGlowRangeMin",      minRange);
+    SetEntProp(entity, Prop_Send, "m_iGlowType",        type);
+    SetEntProp(entity, Prop_Send, "m_nGlowRange",        range);
+    SetEntProp(entity, Prop_Send, "m_nGlowRangeMin",     minRange);
     SetEntProp(entity, Prop_Send, "m_glowColorOverride",
         colorOverride[0] + (colorOverride[1] * 256) + (colorOverride[2] * 65536));
-    SetEntProp(entity, Prop_Send, "m_bFlashing",          flashing);
+    SetEntProp(entity, Prop_Send, "m_bFlashing",         flashing);
     return true;
 }
 
@@ -894,7 +923,6 @@ stock bool L4D2_RemoveEntityGlow(int entity)
     int empty[3];
     return L4D2_SetEntityGlow(entity, L4D2Glow_None, 0, 0, empty, false);
 }
-
 
 // Returns the default game glow color based on survivor health.
 // Values match L4D2 default cl_glow_survivor_health_* cvars (float 0-1 -> int 0-255).
@@ -939,7 +967,6 @@ stock float GetTempHealth(int client)
     float fHealth     = GetEntPropFloat(client, Prop_Send, "m_healthBuffer");
 
     fHealth -= (fGameTime - fHealthTime) * painPillsDecayCvar.FloatValue;
-
     return fHealth < 0.0 ? 0.0 : fHealth;
 }
 
