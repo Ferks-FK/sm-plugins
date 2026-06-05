@@ -68,6 +68,9 @@ float   g_fTimeCannotGetUp[MAXPLAYERS+1];
 float   g_fJumpCooldown[MAXPLAYERS+1];
 float   g_fThinkCooldown[MAXPLAYERS+1];
 float   g_fMoveCooldown[MAXPLAYERS+1];
+int     g_iWallBounceCount[MAXPLAYERS+1];     // number of wall impulses in current window
+float   g_fWallBounceWindowStart[MAXPLAYERS+1]; // when the current bounce window started
+float   g_fWallBounceCooldown[MAXPLAYERS+1];  // lockout time after too many bounces
 float   g_fThinkRate[MAXPLAYERS+1];   // throttle: think runs at ~30fps
 float   g_fLastRagPos[MAXPLAYERS+1][3]; // previous ragdoll position for wall-crossing rollback
 bool    g_bRagInAir[MAXPLAYERS+1];        // ragdoll is airborne (set on jump, cleared on landing)
@@ -201,7 +204,10 @@ public void OnClientDisconnect(int client)
     g_fJumpCooldown[client]    = 0.0;
     g_fThinkCooldown[client]   = 0.0;
     g_fMoveCooldown[client]    = 0.0;
-    g_fThinkRate[client]       = 0.0;
+    g_iWallBounceCount[client]      = 0;
+    g_fWallBounceWindowStart[client] = 0.0;
+    g_fWallBounceCooldown[client]   = 0.0;
+    g_fThinkRate[client]            = 0.0;
     g_fLastRagPos[client][0]   = 0.0;
     g_fLastRagPos[client][1]   = 0.0;
     g_fLastRagPos[client][2]   = 0.0;
@@ -222,7 +228,10 @@ public void OnMapStart()
         g_fJumpCooldown[i]       = 0.0;
         g_fThinkCooldown[i]      = 0.0;
         g_fMoveCooldown[i]       = 0.0;
-        g_fThinkRate[i]          = 0.0;
+        g_iWallBounceCount[i]       = 0;
+        g_fWallBounceWindowStart[i] = 0.0;
+        g_fWallBounceCooldown[i]    = 0.0;
+        g_fThinkRate[i]             = 0.0;
         g_fLastRagPos[i][0]      = 0.0;
         g_fLastRagPos[i][1]      = 0.0;
         g_fLastRagPos[i][2]      = 0.0;
@@ -549,7 +558,10 @@ int CreateFaintRagdoll(int client)
     g_fJumpCooldown[client]    = GetGameTime() + 1.0;
     g_fThinkCooldown[client]   = GetGameTime() + 0.25;
     g_fMoveCooldown[client]    = 0.0;
-    g_fThinkRate[client]       = 0.0;
+    g_iWallBounceCount[client]      = 0;
+    g_fWallBounceWindowStart[client] = 0.0;
+    g_fWallBounceCooldown[client]   = 0.0;
+    g_fThinkRate[client]            = 0.0;
     g_fLastRagPos[client][0]   = 0.0;
     g_fLastRagPos[client][1]   = 0.0;
     g_fLastRagPos[client][2]   = 0.0;
@@ -760,6 +772,36 @@ Action Hook_ClientThink(int client)
 
             if (crossed)
             {
+                // Limit impulses to 3 per 2s window to prevent ping-pong between parallel walls
+                if (g_fWallBounceCooldown[client] > now)
+                {
+                    // In lockout — teleport back to last safe position and zero velocity
+                    float ragAng[3];
+                    GetEntPropVector(rag, Prop_Send, "m_angRotation", ragAng);
+                    TeleportEntity(rag, g_fLastRagPos[client], ragAng, NULL_VECTOR);
+                    float zeroVel[3];
+                    SetEntPropVector(rag, Prop_Data, "m_vecAbsVelocity", zeroVel);
+                }
+                else
+                {
+                    // Reset window if older than 2s
+                    if (now - g_fWallBounceWindowStart[client] > 2.0)
+                    {
+                        g_iWallBounceCount[client]       = 0;
+                        g_fWallBounceWindowStart[client] = now;
+                    }
+
+                    g_iWallBounceCount[client]++;
+
+                    if (g_iWallBounceCount[client] > 3)
+                    {
+                        // Too many bounces — lockout for 1s and reset counter
+                        g_fWallBounceCooldown[client]    = now + 1.0;
+                        g_iWallBounceCount[client]       = 0;
+                        g_fWallBounceWindowStart[client] = 0.0;
+                    }
+                    else
+                    {
                 // Apply impulse away from wall, scaled by movement delta.
                 // Clamped to a maximum to prevent excessive force when stuck.
                 float delta[3];
@@ -796,6 +838,8 @@ Action Hook_ClientThink(int client)
                     SetEntPropVector(rag, Prop_Data, "m_vecAbsVelocity", pushVec);
                     AcceptEntityInput(rag, "Wake");
                 }
+                    } // end bounce count check
+                } // end lockout check
                 return Plugin_Continue;
             }
         }
