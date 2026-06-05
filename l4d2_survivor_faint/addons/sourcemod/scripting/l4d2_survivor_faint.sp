@@ -760,18 +760,42 @@ Action Hook_ClientThink(int client)
 
             if (crossed)
             {
-                // Push ragdoll back in the opposite direction of movement
-                float pushBack[3];
-                pushBack[0] = g_fLastRagPos[client][0] - (curRagPos[0] - g_fLastRagPos[client][0]) * 2.0;
-                pushBack[1] = g_fLastRagPos[client][1] - (curRagPos[1] - g_fLastRagPos[client][1]) * 2.0;
-                pushBack[2] = g_fLastRagPos[client][2];
+                // Apply impulse away from wall, scaled by movement delta.
+                // Clamped to a maximum to prevent excessive force when stuck.
+                float delta[3];
+                delta[0] = curRagPos[0] - g_fLastRagPos[client][0];
+                delta[1] = curRagPos[1] - g_fLastRagPos[client][1];
+                delta[2] = 0.0;
 
                 float ragAng[3];
                 GetEntPropVector(rag, Prop_Send, "m_angRotation", ragAng);
-                TeleportEntity(rag, pushBack, ragAng, NULL_VECTOR);
-                // Zero velocity so the ragdoll doesn't keep pushing into the wall
-                float zeroVel[3];
-                SetEntPropVector(rag, Prop_Data, "m_vecAbsVelocity", zeroVel);
+                TeleportEntity(rag, g_fLastRagPos[client], ragAng, NULL_VECTOR);
+
+                float pushVec[3];
+                pushVec[0] = -delta[0] * 100.0;
+                pushVec[1] = -delta[1] * 100.0;
+                pushVec[2] = 0.0;
+
+                // Cap maximum force to avoid ragdoll flying too far
+                float maxForce = 400.0;
+                float pushLen = SquareRoot(pushVec[0] * pushVec[0] + pushVec[1] * pushVec[1]);
+                if (pushLen > maxForce)
+                {
+                    pushVec[0] = (pushVec[0] / pushLen) * maxForce;
+                    pushVec[1] = (pushVec[1] / pushLen) * maxForce;
+                }
+                pushVec[2] = 150.0; // upward pop to help escape ledges and protrusions
+
+                if (g_hApplyAbsVelocityImpulse != null)
+                {
+                    AcceptEntityInput(rag, "Wake");
+                    SDKCall(g_hApplyAbsVelocityImpulse, rag, pushVec);
+                }
+                else
+                {
+                    SetEntPropVector(rag, Prop_Data, "m_vecAbsVelocity", pushVec);
+                    AcceptEntityInput(rag, "Wake");
+                }
                 return Plugin_Continue;
             }
         }
