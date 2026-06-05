@@ -44,6 +44,10 @@ Handle g_hApplyAbsVelocityImpulse = null;
 #define MOVE_FORCE 16.0
 #define JUMP_FORCE 325.0
 
+// Trace content masks for clip brushes
+#define CONTENTS_PLAYERCLIP  0x10000
+#define CONTENTS_MONSTERCLIP 0x20000
+
 // Glow types (L4D2)
 enum L4D2GlowType
 {
@@ -77,7 +81,6 @@ ConVar  g_cvImpulseInterval;
 ConVar  g_cvAdminsOnly;
 ConVar  g_cvRequireGrounded;
 ConVar  g_cvFallDamage;
-
 ConVar  g_cvGravity;
 
 float g_fImpulseInterval;
@@ -390,9 +393,9 @@ bool IsOnMovingPlatform(int client)
     trEnd      = ragPos;
     trEnd[2]  -= 40.0;
 
-    Handle tr = TR_TraceRayFilterEx(trStart, trEnd, MASK_PLAYERSOLID_BRUSHONLY,
-                                    RayType_EndPoint, Filter_IgnoreRagdoll,
-                                    view_as<any>(rag));
+    Handle tr = TR_TraceRayFilterEx(trStart, trEnd, MASK_PLAYERSOLID,
+                                    RayType_EndPoint, Filter_IgnoreRagdollAndPlayer,
+                                    view_as<any>(rag | (client << 16)));
     bool hit = TR_DidHit(tr);
     int hitEnt = hit ? TR_GetEntityIndex(tr) : -1;
     delete tr;
@@ -487,11 +490,7 @@ int CreateFaintRagdoll(int client)
         delete tr;
     }
 
-    if (StrEqual(model, "models/infected/boomer.mdl") ||
-        StrEqual(model, "models/infected/spitter.mdl"))
-        angles[0] = 90.0;
-    else
-        angles[0] = 0.0;
+    angles[0] = 0.0;
     angles[2] = 0.0;
 
     int rag = CreateEntityByName("prop_ragdoll");
@@ -613,7 +612,6 @@ void RestoreClient(int client, int rag, float savedGroundZ = 0.0)
     SetEntityRenderColor(client, 255, 255, 255, 255);
     SetEntProp(client, Prop_Send, "m_fEffects", 0);
     L4D2_RemoveEntityGlow(client);
-    // m_flFallVelocity is set after teleport below, based on fall height
     SetEntPropFloat(client, Prop_Send, "m_flFallVelocity", 0.0);
 
     if (IsSurvivor(client))
@@ -749,22 +747,31 @@ Action Hook_ClientThink(int client)
         if (g_fLastRagPos[client][0] != 0.0 || g_fLastRagPos[client][1] != 0.0)
         {
             float checkStart[3], checkEnd[3];
-            checkStart = g_fLastRagPos[client];
+            checkStart    = g_fLastRagPos[client];
             checkStart[2] += 20.0;
-            checkEnd    = curRagPos;
-            checkEnd[2] += 20.0;
+            checkEnd      = curRagPos;
+            checkEnd[2]   += 20.0;
 
-            Handle wallTr = TR_TraceRayFilterEx(checkStart, checkEnd, 0x10000|0x20000,
-                                                RayType_EndPoint, Filter_IgnoreRagdoll,
-                                                view_as<any>(rag));
+            Handle wallTr = TR_TraceRayFilterEx(checkStart, checkEnd, CONTENTS_PLAYERCLIP|CONTENTS_MONSTERCLIP,
+                                                RayType_EndPoint, Filter_IgnoreRagdollAndPlayer,
+                                                view_as<any>(rag | (client << 16)));
             bool crossed = TR_DidHit(wallTr);
             delete wallTr;
 
             if (crossed)
             {
+                // Push ragdoll back in the opposite direction of movement
+                float pushBack[3];
+                pushBack[0] = g_fLastRagPos[client][0] - (curRagPos[0] - g_fLastRagPos[client][0]) * 2.0;
+                pushBack[1] = g_fLastRagPos[client][1] - (curRagPos[1] - g_fLastRagPos[client][1]) * 2.0;
+                pushBack[2] = g_fLastRagPos[client][2];
+
                 float ragAng[3];
                 GetEntPropVector(rag, Prop_Send, "m_angRotation", ragAng);
-                TeleportEntity(rag, g_fLastRagPos[client], ragAng, NULL_VECTOR);
+                TeleportEntity(rag, pushBack, ragAng, NULL_VECTOR);
+                // Zero velocity so the ragdoll doesn't keep pushing into the wall
+                float zeroVel[3];
+                SetEntPropVector(rag, Prop_Data, "m_vecAbsVelocity", zeroVel);
                 return Plugin_Continue;
             }
         }
@@ -942,6 +949,13 @@ bool Filter_IgnoreClient(int entity, int contentsMask, any data)
 bool Filter_IgnoreRagdoll(int entity, int contentsMask, any data)
 {
     return entity != data;
+}
+
+bool Filter_IgnoreRagdollAndPlayer(int entity, int contentsMask, any data)
+{
+    int rag    = data & 0xFFFF;
+    int player = (data >> 16) & 0xFFFF;
+    return entity != rag && entity != player;
 }
 
 // -----------------------------------------------------------------------
