@@ -1,5 +1,4 @@
 /**
- * l4d2_survivor_faint.sp
  *
  * Port of the VScript mod "Survivor Fainting" to SourceMod.
  * Spawns a prop_ragdoll at the survivor's position and translates
@@ -24,7 +23,7 @@
 
 Handle g_hApplyAbsVelocityImpulse = null;
 
-#define PLUGIN_VERSION  "1.2.2"
+#define PLUGIN_VERSION  "1.3.0"
 
 // Input flags (L4D2)
 #define IN_ATTACK       (1 << 0)
@@ -67,6 +66,7 @@ float   g_fMoveCooldown[MAXPLAYERS+1];
 float   g_fThinkRate[MAXPLAYERS+1];   // throttle: think runs at ~30fps
 float   g_fLastRagPos[MAXPLAYERS+1][3]; // previous ragdoll position for wall-crossing rollback
 bool    g_bRagInAir[MAXPLAYERS+1];        // ragdoll is airborne (set on jump, cleared on landing)
+float   g_fRagGroundZ[MAXPLAYERS+1];      // highest Z the ragdoll was on the ground; used for fall height calc
 int     g_iWeaponHandEnt[MAXPLAYERS+1] = { INVALID_ENT_REFERENCE, ... }; // active weapon ref saved when faint starts, restored on exit
 
 // -----------------------------------------------------------------------
@@ -75,10 +75,14 @@ int     g_iWeaponHandEnt[MAXPLAYERS+1] = { INVALID_ENT_REFERENCE, ... }; // acti
 ConVar  g_cvImpulseInterval;
 ConVar  g_cvAdminsOnly;
 ConVar  g_cvRequireGrounded;
+ConVar  g_cvFallDamage;
+
+ConVar  g_cvGravity;
 
 float g_fImpulseInterval;
 bool  g_bAdminsOnly;
 bool  g_bRequireGrounded;
+bool  g_bFallDamage;
 
 // -----------------------------------------------------------------------
 // Catches ragdoll destruction by the engine fader — ends faint cleanly
@@ -127,12 +131,16 @@ public void OnPluginStart()
     g_cvImpulseInterval = CreateConVar("l4d2_faint_impulse_interval", "0.06", "Minimum interval between movement impulses (s). Higher = slower.", FCVAR_NOTIFY, true, 0.01);
     g_cvAdminsOnly      = CreateConVar("l4d2_faint_admins_only",      "0",    "Restrict sm_faint to admins (0/1)",                                 FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_cvRequireGrounded = CreateConVar("l4d2_faint_require_grounded", "1",    "Require players to be on the ground to faint (0/1).",                FCVAR_NOTIFY, true, 0.0, true, 1.0);
+    g_cvFallDamage      = CreateConVar("l4d2_faint_fall_damage",      "1",    "Remove faint when ragdoll falls far enough to cause damage (0/1).", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
     AutoExecConfig(true, "l4d2_survivor_faint");
 
     g_cvImpulseInterval.AddChangeHook(OnCvarChanged);
     g_cvAdminsOnly.AddChangeHook(OnCvarChanged);
     g_cvRequireGrounded.AddChangeHook(OnCvarChanged);
+    g_cvFallDamage.AddChangeHook(OnCvarChanged);
+
+    g_cvGravity = FindConVar("sv_gravity");
 
     RegConsoleCmd("sm_faint",       Cmd_Faint,       "Toggle ragdoll on your own survivor");
     RegAdminCmd  ("sm_faintplayer", Cmd_FaintPlayer, ADMFLAG_GENERIC, "Toggle faint on another player: sm_faintplayer <#userid|name>");
@@ -172,6 +180,7 @@ void GetCvars()
     g_fImpulseInterval = g_cvImpulseInterval.FloatValue;
     g_bAdminsOnly      = g_cvAdminsOnly.BoolValue;
     g_bRequireGrounded = g_cvRequireGrounded.BoolValue;
+    g_bFallDamage      = g_cvFallDamage.BoolValue;
 }
 
 public void OnConfigsExecuted()
@@ -193,6 +202,7 @@ public void OnClientDisconnect(int client)
     g_fLastRagPos[client][1]   = 0.0;
     g_fLastRagPos[client][2]   = 0.0;
     g_bRagInAir[client]        = false;
+    g_fRagGroundZ[client]      = 0.0;
     g_iWeaponHandEnt[client]   = INVALID_ENT_REFERENCE;
 }
 
@@ -213,6 +223,7 @@ public void OnMapStart()
         g_fLastRagPos[i][1]      = 0.0;
         g_fLastRagPos[i][2]      = 0.0;
         g_bRagInAir[i]           = false;
+        g_fRagGroundZ[i]         = 0.0;
         g_iWeaponHandEnt[i]      = INVALID_ENT_REFERENCE;
     }
 }
@@ -543,6 +554,7 @@ int CreateFaintRagdoll(int client)
     g_fLastRagPos[client][1]   = 0.0;
     g_fLastRagPos[client][2]   = 0.0;
     g_bRagInAir[client]        = false;
+    g_fRagGroundZ[client]      = origin[2]; // initial ground Z at faint creation
     g_iWeaponHandEnt[client]   = INVALID_ENT_REFERENCE;
 
     // Transfer player velocity to ragdoll at spawn
@@ -566,18 +578,20 @@ void RemoveFaintRagdoll(int client)
     int ragRef = g_iRagdoll[client];
     if (ragRef == INVALID_ENT_REFERENCE) return;
 
-    g_iRagdoll[client] = INVALID_ENT_REFERENCE;
+    float savedGroundZ = g_bFallDamage ? g_fRagGroundZ[client] : 0.0;
 
+    g_iRagdoll[client] = INVALID_ENT_REFERENCE;
     g_fLastRagPos[client][0] = 0.0;
     g_fLastRagPos[client][1] = 0.0;
     g_fLastRagPos[client][2] = 0.0;
+    g_fRagGroundZ[client]    = 0.0;
 
     int rag = EntRefToEntIndex(ragRef);
 
     if (rag == INVALID_ENT_REFERENCE || !IsValidEntity(rag))
     {
         if (IsClientInGame(client))
-            RestoreClient(client, INVALID_ENT_REFERENCE);
+            RestoreClient(client, INVALID_ENT_REFERENCE, savedGroundZ);
         return;
     }
 
@@ -585,12 +599,12 @@ void RemoveFaintRagdoll(int client)
     SDKUnhook(client, SDKHook_WeaponCanUse,  WeaponCanUseSwitch);
     SDKUnhook(client, SDKHook_WeaponSwitch,  WeaponCanUseSwitch);
     SDKUnhook(client, SDKHook_PostThinkPost, Hook_HideAddons);
-    RestoreClient(client, rag);
+    RestoreClient(client, rag, savedGroundZ);
 
     CreateTimer(0.05, Timer_KillRagdoll, ragRef);
 }
 
-void RestoreClient(int client, int rag)
+void RestoreClient(int client, int rag, float savedGroundZ = 0.0)
 {
     if (!IsClientInGame(client)) return;
 
@@ -598,6 +612,7 @@ void RestoreClient(int client, int rag)
     SetEntityRenderColor(client, 255, 255, 255, 255);
     SetEntProp(client, Prop_Send, "m_fEffects", 0);
     L4D2_RemoveEntityGlow(client);
+    // m_flFallVelocity is set after teleport below, based on fall height
     SetEntPropFloat(client, Prop_Send, "m_flFallVelocity", 0.0);
 
     if (IsSurvivor(client))
@@ -628,7 +643,25 @@ void RestoreClient(int client, int rag)
             GetEntPropVector(rag, Prop_Data, "m_vecAbsVelocity", ragVel);
             float clientAng[3];
             GetClientEyeAngles(client, clientAng);
+
+            // Pass downward velocity to player so the game applies correct fall damage.
+            // Uses physics formula: v = sqrt(2 * gravity * height), respects sv_gravity.
+            if (savedGroundZ != 0.0)
+            {
+                float fallHeight = savedGroundZ - ragOrigin[2];
+                if (fallHeight > 0.0)
+                {
+                    float gravity   = g_cvGravity.FloatValue;
+                    float impactVel = SquareRoot(2.0 * gravity * fallHeight);
+                    ragVel[2]       = -impactVel;
+                }
+            }
+
             TeleportEntity(client, ragOrigin, clientAng, ragVel);
+
+            // m_flFallVelocity must match the downward speed for the game to apply damage
+            if (ragVel[2] < 0.0)
+                SetEntPropFloat(client, Prop_Send, "m_flFallVelocity", FloatAbs(ragVel[2]));
         }
     }
 
@@ -736,6 +769,42 @@ Action Hook_ClientThink(int client)
         }
 
         g_fLastRagPos[client] = curRagPos;
+    }
+
+    // Fall damage: check every tick whether ragdoll has fallen far enough to cause damage.
+    // If so, remove the faint — the game handles fall damage naturally when the player lands.
+    if (g_bFallDamage)
+    {
+        float trS[3], trE[3];
+        trS    = curRagPos;
+        trS[2] += 5.0;
+        trE    = curRagPos;
+        trE[2] -= 20.0;
+        Handle groundTr = TR_TraceRayFilterEx(trS, trE, MASK_PLAYERSOLID_BRUSHONLY,
+                                              RayType_EndPoint, Filter_IgnoreRagdoll,
+                                              view_as<any>(rag));
+        bool onGround = TR_DidHit(groundTr);
+        delete groundTr;
+
+        if (onGround)
+        {
+            // Always keep ground reference current — player may have walked downhill
+            g_fRagGroundZ[client] = curRagPos[2];
+        }
+        else if (g_fRagGroundZ[client] != 0.0)
+        {
+            // Ragdoll is airborne — check if fall height exceeds damage threshold.
+            float gravity     = g_cvGravity.FloatValue;
+            float minVel      = 501.0;
+            float minHeight   = (minVel * minVel) / (2.0 * gravity);
+            float fallHeight  = g_fRagGroundZ[client] - curRagPos[2];
+            if (fallHeight >= minHeight)
+            {
+                // Remove faint so the game applies fall damage naturally on landing
+                RemoveFaintRagdoll(client);
+                return Plugin_Continue;
+            }
+        }
     }
 
     // Sync invisible player position to ragdoll each tick (keeps hitbox aligned).
