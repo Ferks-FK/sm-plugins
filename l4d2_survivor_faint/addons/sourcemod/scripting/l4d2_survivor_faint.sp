@@ -12,6 +12,7 @@
  *   l4d2_faint_impulse_interval  - Min interval between movement impulses (default: 0.06s)
  *   l4d2_faint_admins_only       - Restrict sm_faint to admins (0/1)
  *   l4d2_faint_require_grounded  - Require player to be on ground to faint (0/1)
+ *   l4d2_faint_fall_damage       - Remove faint when ragdoll falls far enough to cause damage (0/1)
  */
 
 #pragma semicolon 1
