@@ -1,0 +1,10 @@
+"Phrases"
+{
+    "Recording Started"
+    {
+        "#format"   "{1:s},{2:s}"
+        "en"        "{orange}[Demo]{default} Recording started: {lightgreen}{1} {default}(Match ID: {lightgreen}{2}{default})"
+        "es"	    "{orange}[Demo]{default} Grabación iniciada: {lightgreen}{1} {default}(ID de partida: {lightgreen}{2}{default})"
+        "pt"        "{orange}[Demo]{default} Gravação iniciada: {lightgreen}{1} {default}(ID da partida: {lightgreen}{2}{default})"
+    }
+}
