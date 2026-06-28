@@ -676,6 +676,14 @@ void RestoreClient(int client, int rag, float savedGroundZ = 0.0)
         }
     }
 
+    if (g_iWeaponHandEnt[client] != INVALID_ENT_REFERENCE)
+    {
+        int iEnt = EntRefToEntIndex(g_iWeaponHandEnt[client]);
+        if (iEnt != INVALID_ENT_REFERENCE && IsValidEntity(iEnt))
+            SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", iEnt);
+        g_iWeaponHandEnt[client] = INVALID_ENT_REFERENCE;
+    }
+
     SetEntProp(client, Prop_Send, "m_CollisionGroup", COLLISION_GROUP_PLAYER);
 
     CreateTimer(0.02, Timer_RestoreMoveType, GetClientUserId(client));
@@ -1035,6 +1043,8 @@ void DoAttachments(int client)
     if (!IsClientInGame(client) || !IsPlayerAlive(client)) return;
     SetEntProp(client, Prop_Data, "m_MoveType", MOVETYPE_NONE);
     SetEntProp(client, Prop_Send, "m_CollisionGroup", COLLISION_GROUP_PLAYER);
+    // Keep FL_ONGROUND to make sure the player can still jump and isn't treated as airborne by the game.
+    SetEntityFlags(client, GetEntityFlags(client) | FL_ONGROUND);
 }
 
 int GetRagdoll(int client)

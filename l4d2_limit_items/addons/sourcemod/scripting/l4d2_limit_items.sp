@@ -353,9 +353,11 @@ Action Timer_LimitItems(Handle timer)
 
     LimitSpawns("weapon_grenade_launcher_spawn",         g_cvMaxGrenadeLauncher.IntValue,   "Grenade Launcher");
     LimitSpawns("weapon_chainsaw_spawn",                 g_cvMaxChainsaw.IntValue,          "Chainsaw");
-    LimitSpawns("upgrade_laser_sight",                   g_cvMaxLaserSight.IntValue,        "Laser Sight");
     LimitSpawns("weapon_upgradepack_explosive_spawn",    g_cvMaxUpgradeExplosive.IntValue,  "Upgrade Explosive");
     LimitSpawns("weapon_upgradepack_incendiary_spawn",   g_cvMaxUpgradeIncendiary.IntValue, "Upgrade Incendiary");
+
+    // Laser specific logic, an attempt to always remove the same spawns based on position (thanks Valve)
+    LimitLaserSights(g_cvMaxLaserSight.IntValue);
 
     // Medkit uses its own saferoom-aware logic
     LimitMedkitsInStartSaferoom(g_cvMaxMedkitInside.IntValue, g_cvMaxMedkitOutside.IntValue);
@@ -464,6 +466,72 @@ void LimitSpawns(const char[] classname, int maxAllowed, const char[] label)
         if( g_bDebug )
             LogMessage("[L4D2 Limit Items] %s: found %d, limit %d, removed %d",
                 label, total, maxAllowed, total - maxAllowed);
+    }
+
+    delete hList;
+}
+
+void LimitLaserSights(int maxAllowed)
+{
+    if( maxAllowed < 0 )
+        return;
+
+    ArrayList hList = new ArrayList(4); // x, y, z, entindex
+
+    int ent = -1;
+    while( (ent = FindEntityByClassname(ent, "upgrade_laser_sight")) != -1 )
+    {
+        float pos[3];
+        GetEntPropVector(ent, Prop_Data, "m_vecAbsOrigin", pos);
+        hList.Push(pos[0]);
+        hList.Push(pos[1]);
+        hList.Push(pos[2]);
+        hList.Push(float(ent));
+    }
+
+    int total = hList.Length / 4;
+
+    if( total > maxAllowed )
+    {
+        // Order by X -> Y -> Z, ensuring deterministic order between rounds.
+        for( int i = 0; i < total - 1; i++ )
+        {
+            for( int j = 0; j < total - i - 1; j++ )
+            {
+                int a = j * 4;
+                int b = (j + 1) * 4;
+
+                float ax = hList.Get(a),     ay = hList.Get(a+1), az = hList.Get(a+2);
+                float bx = hList.Get(b),     by = hList.Get(b+1), bz = hList.Get(b+2);
+
+                bool swap = false;
+                if     ( ax != bx ) swap = ax < bx;
+                else if( ay != by ) swap = ay < by;
+                else                swap = az < bz;
+
+                if( swap )
+                {
+                    for( int k = 0; k < 4; k++ )
+                    {
+                        float tmp = hList.Get(a + k);
+                        hList.Set(a + k, hList.Get(b + k));
+                        hList.Set(b + k, tmp);
+                    }
+                }
+            }
+        }
+
+        // Remove the excess (last in the sorted list)
+        for( int i = maxAllowed; i < total; i++ )
+        {
+            int e = RoundToNearest(hList.Get(i * 4 + 3));
+            if( IsValidEntity(e) )
+                RemoveEntity(e);
+        }
+
+        if( g_bDebug )
+            LogMessage("[L4D2 Limit Items] Laser Sight: found %d, limit %d, removed %d",
+                total, maxAllowed, total - maxAllowed);
     }
 
     delete hList;
