@@ -122,8 +122,6 @@ public void OnMapStart()
 {
 	// In cases where a tank spawns and map is changed manually, bypassing round end
 	ClearTankDamage();
-
-	PrecacheSound("ui/pickup_secret01.wav");
 }
 
 public void OnClientDisconnect_Post(int client)
@@ -243,7 +241,6 @@ void Event_TankSpawn(Event event, const char[] name, bool dontBroadcast)
 		return; // Tank passed
 	}
 
-	EmitSoundToAll("ui/pickup_secret01.wav", _, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 0.8);
 	// New tank, damage has not been announced
 	g_bAnnounceTankDamage = true;
 	g_bIsTankInPlay = true;
