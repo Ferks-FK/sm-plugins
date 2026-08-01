@@ -1,0 +1,49 @@
+"Phrases"
+{
+	"TankNameAI"
+	{
+		"en"		"AI"
+		"pt"		"IA"
+		"es"		"IA"
+	}
+
+	"TankHealthRemaining"
+	{
+		"#format"	"{1:s},{2:d}"
+		"en"		"{default}[{green}!{default}] {blue}Tank {default}({olive}{1}{default}) had {green}{2} {default}health remaining"
+		"pt"		"{default}[{green}!{default}] O {blue}Tank {default}({olive}{1}{default}) ficou com {green}{2} {default}de vida restante"
+		"es"		"{default}[{green}!{default}] El {blue}Tank {default}({olive}{1}{default}) quedó con {green}{2} {default}de vida restante"
+	}
+
+	"TankDamageHeader"
+	{
+		"#format"	"{1:s}"
+		"en"		"{default}[{green}!{default}] {blue}Damage {default}dealt to {blue}Tank {default}({olive}{1}{default})"
+		"pt"		"{default}[{green}!{default}] {blue}Dano {default}causado ao {blue}Tank {default}({olive}{1}{default})"
+		"es"		"{default}[{green}!{default}] {blue}Daño {default}causado al {blue}Tank {default}({olive}{1}{default})"
+	}
+
+	"TankDamageLine"
+	{
+		"#format"	"{1:d},{2:d},{3:s}"
+		"en"		"{blue}[{default}{1}{blue}] ({default}{2}%%{blue}) {olive}{3}"
+		"pt"		"{blue}[{default}{1}{blue}] ({default}{2}%%{blue}) {olive}{3}"
+		"es"		"{blue}[{default}{1}{blue}] ({default}{2}%%{blue}) {olive}{3}"
+	}
+
+	"TankIsHere"
+    {
+    	"#format"   "{1:s}"
+        "en"    "{default}[{green}!{default}] Tank is here! ({olive}{1}{default})"
+        "es"    "{default}[{green}!{default}] Tank ha aparecido! ({olive}{1}{default})"
+        "pt"    "{default}[{green}!{default}] Tank apareceu! ({olive}{1}{default})"
+    }
+
+	"RewardPills"
+	{
+		"#format"	"{1:s}"
+		"en"		"{default}[{green}!{default}] {olive}{1} {default}dealt the most damage to the {blue}Tank {default}and received {green}pain pills{default}!"
+		"pt"		"{default}[{green}!{default}] {olive}{1} {default}causou o maior dano ao {blue}Tank {default}e recebeu {green}comprimidos{default}!"
+		"es"		"{default}[{green}!{default}] {olive}{1} {default}causó el mayor daño al {blue}Tank {default}y recibió {green}pastillas{default}!"
+	}
+}

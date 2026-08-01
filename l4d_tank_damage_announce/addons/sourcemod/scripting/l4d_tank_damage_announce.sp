@@ -29,6 +29,7 @@ bool
 	g_bAnnounceTankDamage   = false,    // Whether or not tank damage should be announced
 	g_bIsTankInPlay         = false,    // Whether or not the tank is active
 	g_bPrintedHealth        = false,    // Is Remaining Health showed?
+	g_bTankControllerWasBot = false,    // Was the current tank controller (last tank_spawn) a bot/AI?
 	g_bWasTank[MAXPLAYERS + 1];         // Was Player Tank before he died.
 
 int
@@ -120,8 +121,10 @@ public void OnPluginStart()
 
 public void OnMapStart()
 {
-	// In cases where a tank spawns and map is changed manually, bypassing round end
-	ClearTankDamage();
+    // In cases where a tank spawns and map is changed manually, bypassing round end
+    ClearTankDamage();
+
+    PrecacheSound("ui/pickup_secret01.wav");
 }
 
 public void OnClientDisconnect_Post(int client)
@@ -234,24 +237,46 @@ void Event_PlayerKilled(Event event, const char[] name, bool dontBroadcast)
 
 void Event_TankSpawn(Event event, const char[] name, bool dontBroadcast)
 {
-	int client = GetClientOfUserId(event.GetInt("userid"));
-	g_iTankClient = client;
+    int client = GetClientOfUserId(event.GetInt("userid"));
 
-	if (g_bIsTankInPlay) {
-		return; // Tank passed
-	}
+    bool bIsNewTank = !g_bIsTankInPlay;
+    // A brand new tank always starts out AI-controlled, so treat it as "was bot" for comparison purposes
+    bool bWasBotControlled = bIsNewTank ? true : g_bTankControllerWasBot;
+    bool bIsBotNow = IsFakeClient(client);
 
-	// New tank, damage has not been announced
-	g_bAnnounceTankDamage = true;
-	g_bIsTankInPlay = true;
-	// Set health for damage print in case it doesn't get set by player_hurt (aka no one shoots the tank)
-	g_iLastTankHealth = GetClientHealth(client);
+    g_iTankClient = client;
+
+    if (bIsNewTank) {
+        // New tank, damage has not been announced
+        g_bAnnounceTankDamage = true;
+        g_bIsTankInPlay = true;
+        // Set health for damage print in case it doesn't get set by player_hurt (aka no one shoots the tank)
+        g_iLastTankHealth = GetClientHealth(client);
+    }
+
+    // Only announce when a human player takes control (AI -> Human).
+    // Human -> Human passes and Human -> AI reverts stay silent.
+    if (bWasBotControlled && !bIsBotNow) {
+        AnnounceTankControl(client);
+    }
+
+    g_bTankControllerWasBot = bIsBotNow;
+}
+
+void AnnounceTankControl(int client)
+{
+	char sName[MAX_NAME_LENGTH];
+	GetClientFixedName(client, sName, sizeof(sName));
+
+	EmitSoundToAll("ui/pickup_secret01.wav", _, SNDCHAN_AUTO, SNDLEVEL_NORMAL, SND_NOFLAGS, 1.0);
+	CPrintToChatAll("%t", "TankIsHere", sName);
 }
 
 void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
 	g_bPrintedHealth = false;
 	g_bIsTankInPlay = false;
+	g_bTankControllerWasBot = false;
 	g_iTankClient = 0;
 	ClearTankDamage(); // Probably redundant
 }
@@ -452,6 +477,7 @@ void ClearTankDamage()
 {
 	g_iLastTankHealth = 0;
 	g_iWasTankAI = 0;
+	g_bTankControllerWasBot = false;
 	for (int i = 1; i <= MaxClients; i++) {
 		g_iDamage[i] = 0;
 		g_bWasTank[i] = false;
@@ -533,4 +559,55 @@ stock void LoadTranslation(const char[] translation)
 	}
 
 	LoadTranslations(translation);
+}
+
+/**
+ * Shifts a string that starts with a Valve panel-reserved character (e.g. '[')
+ * one position to the right so it displays correctly in chat/panels.
+ *
+ * @param str		String to fix, in place.
+ * @param maxlen	Size of the str buffer.
+ * @return			True if the string was shifted, false otherwise.
+ */
+stock bool ValvePanel_ShiftInvalidString(char[] str, int maxlen)
+{
+	switch (str[0])
+	{
+	case '[':
+		{
+			char[] temp = new char[maxlen];
+			strcopy(temp, maxlen, str) + 1;
+
+			int size = strcopy(str[1], maxlen-1, temp) + 1;
+
+			str[0] = ' ';
+			str[size < maxlen ? size : maxlen-1] = '\0';
+
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Gets a client's name, fixed up so it always displays correctly and doesn't
+ * overflow chat/panel lines (truncated with "..." past 12 characters).
+ *
+ * @param client	Client index.
+ * @param name		Buffer to store the name.
+ * @param length	Size of the name buffer.
+ * @noreturn
+ */
+stock void GetClientFixedName(int client, char[] name, int length)
+{
+	GetClientName(client, name, length);
+
+	ValvePanel_ShiftInvalidString(name, length);
+
+	if (strlen(name) > 12)
+	{
+		name[9] = name[10] = name[11] = '.';
+		name[12] = '\0';
+	}
 }
