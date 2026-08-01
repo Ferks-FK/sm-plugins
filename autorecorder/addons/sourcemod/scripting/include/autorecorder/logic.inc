@@ -28,8 +28,10 @@ ConVar sm_autorecord_pathfmt         = null;
 ConVar sm_autorecord_upload_enable   = null;
 ConVar sm_autorecord_upload_url      = null;
 ConVar sm_autorecord_upload_apikey   = null;
+ConVar sm_autorecord_recover_enable  = null;
 
 float g_flLastMinPlayersTest = -1.0;
+bool  g_bOrphanScanDone      = false;
 
 char g_szMatchId[16];
 char g_szCurrentCampaign[16];
@@ -54,7 +56,48 @@ enum struct RetryEntry {
 }
 
 #define MAX_RETRY_ATTEMPTS 5
-#define RETRY_INTERVAL    60.0 // 1 Minute
+#define RETRY_INTERVAL    15.0 // 15 Seconds
+#define MAX_ORPHAN_SCAN_DEPTH 6
+
+// ─── Custom log file ─────────────────────────────────────────────────────────
+char g_szLogFile[PLATFORM_MAX_PATH];
+
+void AR_Log_Init()
+{
+    BuildPath(Path_SM, g_szLogFile, sizeof(g_szLogFile), "logs/autorecorder.log");
+}
+
+void AR_WriteLog(const char[] message)
+{
+    Handle file = OpenFile(g_szLogFile, "a");
+    if (file == null) {
+        PrintToServer("[autorecorder] Unable to open log file: %s", g_szLogFile);
+        return;
+    }
+
+    char date[64];
+    FormatTime(date, sizeof(date), "%m/%d/%Y - %H:%M:%S", GetTime());
+
+    WriteFileLine(file, "%s: %s", date, message);
+    CloseHandle(file);
+}
+
+void AR_LogMessage(const char[] format, any ...)
+{
+    char buffer[1024];
+    VFormat(buffer, sizeof(buffer), format, 2);
+    AR_WriteLog(buffer);
+}
+
+void AR_LogError(const char[] format, any ...)
+{
+    char buffer[1024];
+    VFormat(buffer, sizeof(buffer), format, 2);
+
+    char full[1064];
+    Format(full, sizeof(full), "ERROR: %s", buffer);
+    AR_WriteLog(full);
+}
 
 // ─── Upload ──────────────────────────────────────────────────────────────────
 
@@ -67,12 +110,12 @@ void UploadDemo(const char[] demoPath, const char[] matchId, const char[] mapNam
     char url[512];
     sm_autorecord_upload_url.GetString(url, sizeof(url));
     if (url[0] == '\0') {
-        LogError("sm_autorecord_upload_url is not set — demo not uploaded");
+        AR_LogError("sm_autorecord_upload_url is not set — demo not uploaded");
         return;
     }
 
     if (!FileExists(demoPath)) {
-        LogError("Demo file not found for upload: %s", demoPath);
+        AR_LogError("Demo file not found for upload: %s", demoPath);
         return;
     }
 
@@ -114,7 +157,7 @@ void UploadDemo(const char[] demoPath, const char[] matchId, const char[] mapNam
 
     req.UploadFile(demoPath, OnDemoUploaded, pack);
 
-    LogMessage("Uploading demo: %s -> %s (DemoPath: %s)", filename, url, demoPath);
+    AR_LogMessage("Uploading demo: %s -> %s (DemoPath: %s)", filename, url, demoPath);
 }
 
 public void OnDemoUploaded(HTTPStatus status, any value)
@@ -132,20 +175,20 @@ public void OnDemoUploaded(HTTPStatus status, any value)
     delete pack;
 
     if (status == HTTPStatus_Created || status == HTTPStatus_OK) {
-        LogMessage("Demo uploaded successfully (HTTP %d): %s", status, path);
+        AR_LogMessage("Demo uploaded successfully (HTTP %d): %s", status, path);
 
         if (DeleteFile(path)) {
-            LogMessage("Demo deleted from disk: %s", path);
+            AR_LogMessage("Demo deleted from disk: %s", path);
         } else {
-            LogError("Failed to delete demo from disk: %s", path);
+            AR_LogError("Failed to delete demo from disk: %s", path);
         }
     }
     else if (status == HTTPStatus_Forbidden) {
         // Configuration error — no point in retrying
-        LogError("Demo upload failed: invalid API key (HTTP 403) — not retrying: %s", path);
+        AR_LogError("Demo upload failed: invalid API key (HTTP 403) — not retrying: %s", path);
     }
     else {
-        LogError("Demo upload failed (HTTP %d) — queuing for retry: %s", status, path);
+        AR_LogError("Demo upload failed (HTTP %d) — queuing for retry: %s", status, path);
         QueueRetry(path, matchId, mapName, attempts);
     }
 }
@@ -170,7 +213,7 @@ void QueueRetry(const char[] path, const char[] matchId, const char[] mapName, i
     newEntry.attempts = attempts;
 
     g_hRetryQueue.PushArray(newEntry);
-    LogMessage("Demo queued for retry: %s (attempt %d/%d, queue size: %d)", path, attempts, MAX_RETRY_ATTEMPTS, g_hRetryQueue.Length);
+    AR_LogMessage("Demo queued for retry: %s (attempt %d/%d, queue size: %d)", path, attempts, MAX_RETRY_ATTEMPTS, g_hRetryQueue.Length);
 }
 
 public Action Timer_RetryUploads(Handle timer)
@@ -182,19 +225,203 @@ public Action Timer_RetryUploads(Handle timer)
     g_hRetryQueue.Erase(0);
 
     if (!FileExists(entry.path)) {
-        LogError("Retry skipped — file no longer exists: %s", entry.path);
+        AR_LogError("Retry skipped — file no longer exists: %s", entry.path);
         return Plugin_Continue;
     }
 
     if (entry.attempts >= MAX_RETRY_ATTEMPTS) {
-        LogError("Demo retry limit reached (%d attempts), giving up: %s", entry.attempts, entry.path);
+        AR_LogError("Demo retry limit reached (%d attempts), giving up: %s", entry.attempts, entry.path);
         return Plugin_Continue;
     }
 
-    LogMessage("Retrying demo upload (attempt %d/%d): %s", entry.attempts + 1, MAX_RETRY_ATTEMPTS, entry.path);
+    AR_LogMessage("Retrying demo upload (attempt %d/%d): %s", entry.attempts + 1, MAX_RETRY_ATTEMPTS, entry.path);
     UploadDemo(entry.path, entry.matchId, entry.mapName, entry.attempts + 1);
 
     return Plugin_Continue;
+}
+
+// ─── Orphaned demo recovery ─────────────────────────────────────────────────
+// Recovers demos left behind by a crash/kill (SourceTV_OnStopRecording never
+// fires). Only possible if sm_autorecord_pathfmt uses %m as its own path
+// segment (e.g. "demos/%m/%l"), since that's the only way to know which
+// match a leftover demo belongs to.
+// Resolves the directory to scan: sm_autorecord_pathfmt up to the %m segment.
+// Only %f, %i, %P, %L and %% are resolved there, since they're stable across
+// restarts - any other specifier means the prefix can't be reconstructed.
+bool GetOrphanScanRoot(char[] root, int maxlength)
+{
+    char fmt[PLATFORM_MAX_PATH];
+    sm_autorecord_pathfmt.GetString(fmt, sizeof(fmt));
+
+    if (fmt[0] == '\0') {
+        AR_LogMessage("Orphan demo recovery: sm_autorecord_pathfmt is empty - skipping scan");
+        return false;
+    }
+
+    int idx = StrContains(fmt, "%m", true);
+    if (idx == -1) {
+        AR_LogMessage("Orphan demo recovery: sm_autorecord_pathfmt (\"%s\") does not use %%m - skipping scan", fmt);
+        return false;
+    }
+
+    // %m must be its own path segment: bounded by '/' (or string edges)
+    bool precededOk = (idx > 0) && (fmt[idx - 1] == '/');
+    bool followedOk = (fmt[idx + 2] == '\0') || (fmt[idx + 2] == '/');
+    if (!precededOk || !followedOk) {
+        AR_LogMessage("Orphan demo recovery: %%m in sm_autorecord_pathfmt (\"%s\") is not its own path segment - skipping scan", fmt);
+        return false;
+    }
+
+    char prefixFmt[PLATFORM_MAX_PATH];
+    strcopy(prefixFmt, sizeof(prefixFmt), fmt);
+    prefixFmt[idx] = '\0';
+
+    for (int i = 0; prefixFmt[i] != '\0'; i++) {
+        if (prefixFmt[i] != '%') continue;
+
+        char specifier = prefixFmt[i + 1];
+        if (specifier != 'f' && specifier != 'i' && specifier != 'P' && specifier != 'L' && specifier != '%') {
+            AR_LogMessage("Orphan demo recovery: sm_autorecord_pathfmt prefix (\"%s\") before %%m has an unstable specifier (%%%c) - skipping scan", prefixFmt, specifier);
+            return false;
+        }
+        i++;
+    }
+
+    int rootlen = FormatPathString(root, maxlength, prefixFmt);
+    if (rootlen == 0) {
+        AR_LogMessage("Orphan demo recovery: resolved root path is empty (prefix: \"%s\") - skipping scan", prefixFmt);
+        return false;
+    }
+
+    // Drop the trailing '/' so later concatenation doesn't produce "//"
+    if (root[rootlen - 1] == '/') {
+        root[rootlen - 1] = '\0';
+    }
+
+    if (root[0] == '\0') {
+        AR_LogMessage("Orphan demo recovery: resolved root path is empty (prefix: \"%s\") - skipping scan", prefixFmt);
+        return false;
+    }
+
+    return true;
+}
+
+int ScanMatchDirForDemos(const char[] dirPath, const char[] matchId, int depth)
+{
+    if (depth > MAX_ORPHAN_SCAN_DEPTH) {
+        AR_LogMessage("Orphan demo recovery: max scan depth reached at \"%s\" - skipping", dirPath);
+        return 0;
+    }
+
+    DirectoryListing dir = OpenDirectory(dirPath);
+    if (dir == null) {
+        AR_LogMessage("Orphan demo recovery: failed to open directory \"%s\"", dirPath);
+        return 0;
+    }
+
+    int found = 0;
+    char entry[PLATFORM_MAX_PATH];
+    FileType type;
+
+    while (dir.GetNext(entry, sizeof(entry), type)) {
+        if (StrEqual(entry, ".") || StrEqual(entry, "..")) continue;
+
+        char fullPath[PLATFORM_MAX_PATH];
+        Format(fullPath, sizeof(fullPath), "%s/%s", dirPath, entry);
+
+        if (type == FileType_Directory) {
+            found += ScanMatchDirForDemos(fullPath, matchId, depth + 1);
+            continue;
+        }
+
+        int len = strlen(entry);
+        if (len <= 4 || !StrEqual(entry[len - 4], ".dem")) continue;
+
+        // Never touch the demo that's actively being recorded right now
+        if (SourceTV_IsRecording() && StrEqual(fullPath, g_szDemoPath)) continue;
+
+        char mapName[PLATFORM_MAX_PATH];
+        ExtractMapNameFromDemoFile(entry, mapName, sizeof(mapName));
+
+        AR_LogMessage("Found orphaned demo: %s (match: %s, map: %s) — queuing for upload", fullPath, matchId, mapName);
+        QueueRetry(fullPath, matchId, mapName);
+        found++;
+    }
+
+    delete dir;
+    return found;
+}
+
+// Strips ".dem" and the ".N" overwrite-protection suffix, e.g. "c1m1_hotel.2.dem" -> "c1m1_hotel"
+void ExtractMapNameFromDemoFile(const char[] filename, char[] mapName, int maxlength)
+{
+    strcopy(mapName, maxlength, filename);
+
+    int len = strlen(mapName);
+    if (len > 4 && StrEqual(mapName[len - 4], ".dem")) {
+        mapName[len - 4] = '\0';
+        len -= 4;
+    }
+
+    int dot = FindCharInString(mapName, '.', true);
+    if (dot != -1 && dot + 1 < len) {
+        bool numeric = true;
+        for (int i = dot + 1; i < len; i++) {
+            if (!IsCharNumeric(mapName[i])) { numeric = false; break; }
+        }
+        if (numeric) {
+            mapName[dot] = '\0';
+        }
+    }
+}
+
+void ScanForOrphanedDemos()
+{
+    if (!sm_autorecord_recover_enable.BoolValue) {
+        AR_LogMessage("Orphan demo recovery: sm_autorecord_recover_enable is disabled - skipping scan");
+        return;
+    }
+    if (!sm_autorecord_upload_enable.BoolValue) {
+        AR_LogMessage("Orphan demo recovery: sm_autorecord_upload_enable is disabled - skipping scan");
+        return;
+    }
+
+    char root[PLATFORM_MAX_PATH];
+    if (!GetOrphanScanRoot(root, sizeof(root))) return;
+
+    if (!DirExists(root)) {
+        AR_LogMessage("Orphan demo recovery: root directory \"%s\" does not exist - skipping scan", root);
+        return;
+    }
+
+    DirectoryListing dir = OpenDirectory(root);
+    if (dir == null) {
+        AR_LogMessage("Orphan demo recovery: failed to open root directory \"%s\"", root);
+        return;
+    }
+
+    AR_LogMessage("Orphan demo recovery: scanning \"%s\" for leftover demos", root);
+
+    int found = 0;
+    int matchDirs = 0;
+    char entry[PLATFORM_MAX_PATH];
+    FileType type;
+
+    while (dir.GetNext(entry, sizeof(entry), type)) {
+        if (type != FileType_Directory) continue;
+        if (StrEqual(entry, ".") || StrEqual(entry, "..")) continue;
+
+        matchDirs++;
+
+        char matchDir[PLATFORM_MAX_PATH];
+        Format(matchDir, sizeof(matchDir), "%s/%s", root, entry);
+
+        found += ScanMatchDirForDemos(matchDir, entry, 0);
+    }
+
+    delete dir;
+
+    AR_LogMessage("Orphan demo recovery: scanned %d match folder(s) in \"%s\", queued %d leftover demo(s) for upload", matchDirs, root, found);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -377,9 +604,9 @@ void TryStartAutoRecording(const char[] reason)
 
     char error[512];
     if (TryStartRecording(NULL_STRING, error, sizeof(error))) {
-        LogMessage("Started autorecording (reason: \"%s\")", reason);
+        AR_LogMessage("Started autorecording (reason: \"%s\")", reason);
     } else {
-        LogError("Unable to start autorecording (error: \"%s\")", error);
+        AR_LogError("Unable to start autorecording (error: \"%s\")", error);
     }
 }
 
@@ -410,7 +637,7 @@ public void Handler_Frame_CheckStopRecording(any data)
         if (bytes / 1000 / 1000 >= maxsize) {
             char szSize[64];
             Util_FormatBytes(szSize, sizeof(szSize), bytes);
-            LogMessage("Restarting demo recording (size: %s)", szSize);
+            AR_LogMessage("Restarting demo recording (size: %s)", szSize);
             SourceTV_StopRecording();
             TryStartAutoRecording("Max demo file size reached");
             return;
@@ -423,7 +650,7 @@ public void Handler_Frame_CheckStopRecording(any data)
         if (seconds / 60 >= maxlength) {
             char szLength[64];
             Util_FormatSeconds(szLength, sizeof(szLength), seconds);
-            LogMessage("Restarting demo recording (length: %s)", szLength);
+            AR_LogMessage("Restarting demo recording (length: %s)", szLength);
             SourceTV_StopRecording();
             TryStartAutoRecording("Max demo length reached");
             return;
@@ -521,6 +748,13 @@ public int SourceTV_OnStopRecording(int instance, const char[] filename, int rec
 public void OnConfigsExecuted()
 {
     TryStartAutoRecording("Config executed");
+
+    // Waits until here (rather than OnPluginStart) since sm_autorecord_pathfmt
+    // is set via server.cfg and isn't available yet at plugin load.
+    if (!g_bOrphanScanDone) {
+        g_bOrphanScanDone = true;
+        ScanForOrphanedDemos();
+    }
 }
 
 public void Handler_Frame_MapStart(any data)
@@ -543,7 +777,7 @@ public void OnMapStart()
         if (g_szCurrentCampaign[0] == '\0' || !StrEqual(g_szCurrentCampaign, newCampaign)) {
             strcopy(g_szCurrentCampaign, sizeof(g_szCurrentCampaign), newCampaign);
             GenerateMatchId();
-            LogMessage("Campaign changed to %s - New match ID: %s", newCampaign, g_szMatchId);
+            AR_LogMessage("Campaign changed to %s - New match ID: %s", newCampaign, g_szMatchId);
         }
     }
 
@@ -569,7 +803,7 @@ void Logic_Init()
 
     sm_server_uid = CreateConVar("sm_server_uid", "", "Unique server ID string");
 
-    sm_autorecord_match_id        = CreateConVar("sm_autorecord_match_id", "", "Current match ID (auto-managed)", FCVAR_ARCHIVE);
+    sm_autorecord_match_id        = CreateConVar("sm_autorecord_match_id",        "", "Current match ID (auto-managed)", FCVAR_ARCHIVE);
     sm_autorecord_enable          = CreateConVar("sm_autorecord_enable",          "1",   "Enable autorecording features");
     sm_autorecord_minplayers      = CreateConVar("sm_autorecord_minplayers",      "1",   "Minimum players required to allow demo recording");
     sm_autorecord_minplayersdelay = CreateConVar("sm_autorecord_minplayersdelay", "30.0","Delay before stopping a demo, in seconds", FCVAR_NONE, true, 0.0, true, 300.0);
@@ -595,6 +829,9 @@ void Logic_Init()
     sm_autorecord_upload_enable  = CreateConVar("sm_autorecord_upload_enable",  "1", "Enable automatic demo upload after recording stops");
     sm_autorecord_upload_url     = CreateConVar("sm_autorecord_upload_url",     "",  "URL of the demo upload endpoint (e.g., https://mysite.com/api/demos/upload)");
     sm_autorecord_upload_apikey  = CreateConVar("sm_autorecord_upload_apikey",  "",  "API key for demo upload endpoint");
+    sm_autorecord_recover_enable = CreateConVar("sm_autorecord_recover_enable", "1",
+        "On startup, scan the demo folder for leftover .dem files (e.g. from a crash) and upload them.\n"
+        ... "	Requires sm_autorecord_pathfmt to use %m as its own path segment (e.g. \"demos/%m/%l\"), otherwise there's no way to know which match a leftover demo belongs to.");
 
     sm_autorecord_minplayers.AddChangeHook(Handler_ConVar_Change);
     sm_autorecord_ignorebots.AddChangeHook(Handler_ConVar_Change);
@@ -612,7 +849,7 @@ void Logic_Init()
 
     if (savedId[0] != '\0') {
         strcopy(g_szMatchId, sizeof(g_szMatchId), savedId);
-        LogMessage("Restored match ID: %s", g_szMatchId);
+        AR_LogMessage("Restored match ID: %s", g_szMatchId);
     } else {
         GenerateMatchId();
     }

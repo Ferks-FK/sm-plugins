@@ -56,7 +56,7 @@ public Action sm_record(int client, int args)
     }
     else {
         ReplyToCommand(client, "Unable to start recording (error: \"%s\")", error);
-        LogError("Unable to start recording (by: %L, error: \"%s\")", client, error);
+        AR_LogError("Unable to start recording (by: %L, error: \"%s\")", client, error);
     }
 
     return Plugin_Handled;

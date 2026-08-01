@@ -14,6 +14,7 @@ public void OnPluginStart()
 
     CreateNative("AR_GetMatchID", Native_AR_GetMatchID);
 
+    AR_Log_Init();
     Logic_Init();
     Console_Init();
 }
@@ -50,6 +51,6 @@ public Plugin myinfo =
     name = "[L4D/2] Automated Demo Recording",
     author = "shqke, Ferks-FK",
     description = "Plugin takes control over demo recording process allowing to record only useful footage",
-    version = "1.3",
+    version = "1.4",
     url = "https://github.com/shqke/sp_public"
 };
