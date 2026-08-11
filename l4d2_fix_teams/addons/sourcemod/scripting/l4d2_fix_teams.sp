@@ -2,17 +2,25 @@
 #include <sdktools>
 #include <left4dhooks>
 
-#define PLUGIN_VERSION "1.1.0"
+#define PLUGIN_VERSION "1.2.0"
 
 #define L4D2_TEAM_NONE      0
 #define L4D2_TEAM_SPECTATOR 1
 #define L4D2_TEAM_SURVIVOR  2
 #define L4D2_TEAM_INFECTED  3
 
+// How long to wait, after the initial 30s watchdog, before rechecking a reserved
+// player who is still connected but hasn't finished loading.
+#define FIX_TEAMS_RECHECK_INTERVAL 10.0
+// Hard cap (seconds since the watchdog started) after which leftover slots are
+// handed to unreserved spectators regardless of a still-connecting straggler.
+#define FIX_TEAMS_MAX_WAIT_SECONDS 60
+
 bool g_MustBeFixTeams = false;
 bool g_PluginMoving = false;
 
 Handle g_MustBeFixTimer = INVALID_HANDLE;
+int g_MustBeFixElapsed = 0;
 
 ConVar g_CvarSurvivorLimit;
 ConVar g_CvarMaxInfected;
@@ -61,14 +69,17 @@ public void OnMapStart()
     if (!g_MustBeFixTeams) return;
 
     // Remove from map who didn't reconnect (real disconnection during transition).
-    CreateTimer(5.0, Timer_PurgeDisconnected);
+    // Repeats while the fix is active so late/real disconnects free up their slot promptly.
+    CreateTimer(5.0, Timer_PurgeDisconnected, _, TIMER_REPEAT);
 }
 
 Action Timer_PurgeDisconnected(Handle timer)
 {
+    if (!g_MustBeFixTeams) return Plugin_Stop;
+
     PurgeDisconnectedFromMap(g_WinnersMap);
     PurgeDisconnectedFromMap(g_LosersMap);
-    return Plugin_Stop;
+    return Plugin_Continue;
 }
 
 void PurgeDisconnectedFromMap(StringMap map)
@@ -98,6 +109,7 @@ public void L4D2_OnEndVersusModeRound_Post()
         g_MustBeFixTimer = INVALID_HANDLE;
     }
 
+    g_MustBeFixElapsed = 0;
     g_MustBeFixTeams = true;
     SaveTeams();
 }
@@ -130,13 +142,26 @@ Action Timer_FixTeams(Handle timer)
 
 Action Timer_DisableFixTeams(Handle timer)
 {
-    g_MustBeFixTeams = false;
-    g_MustBeFixTimer = INVALID_HANDLE;
-
     bool survivorsAreWinning = SurvivorsAreWinning();
 
     int winnerTeam = survivorsAreWinning ? L4D2_TEAM_SURVIVOR : L4D2_TEAM_INFECTED;
     int losersTeam = survivorsAreWinning ? L4D2_TEAM_INFECTED : L4D2_TEAM_SURVIVOR;
+
+    // A reserved player who is still connected but hasn't finished loading shouldn't
+    // lose their slot to an unreserved spectator just because the clock ran out.
+    bool stillWaiting = HasPendingReservedPlayer(g_WinnersMap, winnerTeam)
+        || HasPendingReservedPlayer(g_LosersMap, losersTeam);
+
+    if (stillWaiting && g_MustBeFixElapsed < FIX_TEAMS_MAX_WAIT_SECONDS)
+    {
+        g_MustBeFixElapsed += RoundToNearest(FIX_TEAMS_RECHECK_INTERVAL);
+        g_MustBeFixTimer = CreateTimer(FIX_TEAMS_RECHECK_INTERVAL, Timer_DisableFixTeams);
+        return Plugin_Stop;
+    }
+
+    g_MustBeFixTeams = false;
+    g_MustBeFixTimer = INVALID_HANDLE;
+    g_MustBeFixElapsed = 0;
 
     MoveSpectatorsToAvailableTeam(g_WinnersMap, winnerTeam);
     MoveSpectatorsToAvailableTeam(g_LosersMap,  losersTeam);
@@ -152,7 +177,10 @@ Action Timer_CheckFixTeams(Handle timer)
         return Plugin_Stop;
 
     if (g_MustBeFixTimer == INVALID_HANDLE)
+    {
+        g_MustBeFixElapsed = 30;
         g_MustBeFixTimer = CreateTimer(30.0, Timer_DisableFixTeams);
+    }
 
     CreateTimer(1.0, Timer_FixTeams);
 
@@ -165,6 +193,7 @@ void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
     {
         g_MustBeFixTeams = false;
         g_MustBeFixTimer = INVALID_HANDLE;
+        g_MustBeFixElapsed = 0;
         ClearTeamsData();
         return;
     }
@@ -215,8 +244,11 @@ void FixTeams()
     int winnerTeam = survivorsAreWinning ? L4D2_TEAM_SURVIVOR : L4D2_TEAM_INFECTED;
     int losersTeam = survivorsAreWinning ? L4D2_TEAM_INFECTED : L4D2_TEAM_SURVIVOR;
 
-    MoveToSpectatorWhoIsNotInTheTeam(g_WinnersMap, winnerTeam);
-    MoveToSpectatorWhoIsNotInTheTeam(g_LosersMap,  losersTeam);
+    // Only restrict a team while its own reservation map still has entries — once a
+    // side is fully resolved (everyone reconnected or purged), it shouldn't keep
+    // bouncing unrelated players to spectator just because the other side is pending.
+    if (g_WinnersMap.Size > 0) MoveToSpectatorWhoIsNotInTheTeam(g_WinnersMap, winnerTeam, g_LosersMap);
+    if (g_LosersMap.Size  > 0) MoveToSpectatorWhoIsNotInTheTeam(g_LosersMap,  losersTeam, g_WinnersMap);
 
     MoveSpectatorsToTheCorrectTeam(g_WinnersMap, winnerTeam);
     MoveSpectatorsToTheCorrectTeam(g_LosersMap,  losersTeam);
@@ -275,10 +307,28 @@ int FindClientBySteamId(const char[] steamId)
 }
 
 // ---------------------------------------------------------------------------
-// Move to spectator players who are in a team but NOT saved in it
+// Move to spectator players who are occupying a team slot without being
+// reserved for it. Two kinds of intruder are treated differently:
+//   - Reserved for the OTHER side: always bounced, so they get re-seated on
+//     their correct team — this is the "fix who's on the wrong team" case.
+//   - Not reserved anywhere: only bounced enough to cover a real capacity
+//     deficit — i.e. only if THIS team doesn't have room for both its
+//     current occupants and its still-connecting reserved players. During a
+//     map transition it's normal for several reserved players to be mid-load
+//     at once, so merely having *some* pending reservation isn't enough
+//     reason to evict someone; a slot vacated by a reserved player who
+//     didn't come back (or disconnected for good) is real, available room
+//     and must NOT be held open for them.
 // ---------------------------------------------------------------------------
-void MoveToSpectatorWhoIsNotInTheTeam(StringMap map, int team)
+void MoveToSpectatorWhoIsNotInTheTeam(StringMap map, int team, StringMap otherMap)
 {
+    int pendingReserved = CountPendingReservedPlayers(map, team);
+
+    // How many people currently in this team must leave for every reserved,
+    // still-connecting player to have a seat once they're ready. If there's
+    // already room (deficit <= 0), no unreserved occupant needs to move.
+    int deficit = (NumberOfPlayersInTheTeam(team) + pendingReserved) - TeamSize(team);
+
     char steamId[32];
 
     for (int client = 1; client <= MaxClients; client++)
@@ -290,9 +340,21 @@ void MoveToSpectatorWhoIsNotInTheTeam(StringMap map, int team)
             continue;
 
         bool dummy;
-        if (!map.GetValue(steamId, dummy))
+        if (map.GetValue(steamId, dummy))
+            continue; // Reserved for this team — leave alone.
+
+        if (otherMap.GetValue(steamId, dummy))
+        {
+            // Belongs to the other side — always correct, regardless of capacity.
+            MovePlayerToTeam(client, L4D2_TEAM_SPECTATOR);
+            deficit--;
+            continue;
+        }
+
+        if (deficit > 0)
         {
             MovePlayerToTeam(client, L4D2_TEAM_SPECTATOR);
+            deficit--;
         }
     }
 }
@@ -323,6 +385,40 @@ void MoveSpectatorsToTheCorrectTeam(StringMap map, int team)
     }
 
     delete snapshot;
+}
+
+// ---------------------------------------------------------------------------
+// Number of reserved players who are still connected to the server but
+// haven't been seated in their team yet (e.g. still loading the map). A
+// reserved player who isn't connected at all doesn't count — their slot is
+// free for anyone until they reconnect or their reservation gets purged.
+// ---------------------------------------------------------------------------
+int CountPendingReservedPlayers(StringMap map, int team)
+{
+    StringMapSnapshot snapshot = map.Snapshot();
+    char steamId[32];
+    int pending = 0;
+
+    for (int i = 0; i < snapshot.Length; i++)
+    {
+        snapshot.GetKey(i, steamId, sizeof(steamId));
+
+        int client = FindClientBySteamId(steamId);
+        if (client == -1) continue; // Not connected at all — doesn't hold up the slot.
+
+        if (!IsClientInGame(client) || GetClientTeam(client) != team)
+            pending++;
+    }
+
+    delete snapshot;
+    return pending;
+}
+
+// Used by the 30s watchdog to avoid handing a still-loading reserved
+// player's slot away to an unreserved spectator.
+bool HasPendingReservedPlayer(StringMap map, int team)
+{
+    return CountPendingReservedPlayers(map, team) > 0;
 }
 
 // ---------------------------------------------------------------------------
