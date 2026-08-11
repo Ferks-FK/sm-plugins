@@ -1,0 +1,99 @@
+"Phrases"
+{
+	"phrase1"
+	{
+		"en"	"{default}[{green}!{default}] Type {olive}!pass{default} to give the Tank to another player."
+		"es"	"{default}[{green}!{default}] Escribe {olive}!pass{default} para pasar el Tanque a otro jugador."
+		"pt"	"{default}[{green}!{default}] Digite {olive}!pass{default} para dar o Tank a outro jogador."
+	}
+	"phrase2"
+	{
+		"en"	"{default}[{green}!{default}] The Tank can be given to another player before the Frustration meter runs out."
+		"es"	"{default}[{green}!{default}] El Tanque se puede entregar a otro jugador antes de que se agote el medidor de frustración."
+        "pt"    "{default}[{green}!{default}] O Tank pode ser dado a outro jogador antes que o medidor de Frustração se esgote."
+	}
+	"phrase3"
+	{
+		"#format" "{1:N},{2:N}"
+		"en"	"{default}[{green}!{default}] {1} passed the Tank to {2}"
+		"es"	"{default}[{green}!{default}] {1} pasó el Tanque a {2}"
+		"pt"	"{default}[{green}!{default}] {1} passou o Tank para {2}"
+	}
+	"phrase4"
+	{
+		"en"	"Who will take the Tank?"
+		"es"	"¿Quién tomará el Tanque?"
+        "pt"    "Quem controlará o Tank?"
+	}
+	"phrase5"
+	{
+		"en"	"Do you want to play as the Tank?"
+		"es"	"¿Quieres jugar como el Tanque?"
+        "pt"    "Você quer jogar como Tank?"
+	}
+	"phrase6"
+	{
+		"#format" "{1:N}"
+		"en"	"{default}[{green}!{default}] {1} didn't agree to be the Tank."
+		"es"	"{default}[{green}!{default}] {1} no estuvo de acuerdo en ser el Tanque."
+		"pt"	"{default}[{green}!{default}] {1} não quer ser o Tank."
+	}
+	"phrase7"
+	{
+		"en"	"{default}[{green}!{default}] The Tank can't be passed right now."
+		"es"	"{default}[{green}!{default}] El Tanque no se puede pasar en este momento."
+        "pt"    "{default}[{green}!{default}] O Tank não pode ser passado agora."
+	}
+	"phrase8"
+	{
+		"en"	"{default}[{green}!{default}] The Tank can't be passed when it's on fire."
+		"es"	"{default}[{green}!{default}] El Tanque no se puede pasar cuando está en llamas."
+        "pt"    "{default}[{green}!{default}] O Tank não pode ser passado enquanto está em chamas."
+	}
+	"phrase9"
+	{
+		"#format" "{1:N}"
+		"en"	"{default}[{green}!{default}] An admin has passed the Tank to {1}"
+		"es"	"{default}[{green}!{default}] Un administrador ha pasado el Tanque a {1}"
+		"pt"	"{default}[{green}!{default}] Um administrador passou o Tank para {1}"
+	}
+	"phrase10"
+	{
+		"en"	"Pass the Tank"
+		"es"	"Pasar el Tanque"
+		"pt"	"Passar o Tank"
+	}
+	"phrase11"
+	{
+		"en"	"{default}[{green}!{default}] The Tank can only be passed when it hasn't received any damage."
+		"es"	"{default}[{green}!{default}] El Tanque sólo se puede pasar cuando no ha recibido ningún daño."
+		"pt"	"{default}[{green}!{default}] O Tank só pode ser passado se não tiver recebido nenhum dano."
+	}
+	"phrase12"
+	{
+		"en"	"Control Tank Bot"
+		"es"	"Control Tanque Bot"
+		"pt"	"Controlar Tank Bot"
+	}
+	"phrase13"
+	{
+		"#format" "{1:d},{2:d}"
+		"en"	"{default}[{green}!{default}] The Tank pass limit reached [{olive}{1}{default}/{olive}{2}{default}]."
+		"es"	"{default}[{green}!{default}] Se alcanzó el límite de pases del Tanque [{olive}{1}{default}/{olive}{2}{default}]."
+		"pt"	"{default}[{green}!{default}] O limite do passe do Tank foi atingido [{olive}{1}{default}/{olive}{2}{default}]."
+	}
+	"phrase14"
+	{
+		"#format" "{1:N},{2:N},{3:d},{4:d}"
+		"en"	"{default}[{green}!{default}] {blue}{1}{default} passed the Tank to {blue}{2}{default} [{olive}{3}{default}/{olive}{4}{default}]."
+		"es"	"{default}[{green}!{default}] {blue}{1}{default} pasó el Tanque a {blue}{2}{default} [{olive}{3}{default}/{olive}{4}{default}]."
+		"pt"	"{default}[{green}!{default}] {blue}{1}{default} passou o Tank para {blue}{2}{default} [{olive}{3}{default}/{olive}{4}{default}]."
+	}
+	"phrase15"
+	{
+		"#format"	"{1:N},{2:d},{3:d}"
+		"en"		"{default}[{green}!{default}] The Tank was automatically passed to {blue}{1}{default} due to frustration [{olive}{2}{default}/{olive}{3}{default}]."
+		"pt"		"{default}[{green}!{default}] O Tank foi passado automaticamente para {blue}{1}{default} devido à frustração [{olive}{2}{default}/{olive}{3}{default}]."
+		"es"		"{default}[{green}!{default}] El Tank fue pasado automáticamente a {blue}{1}{default} debido a la frustración [{olive}{2}{default}/{olive}{3}{default}]."
+	}
+}
