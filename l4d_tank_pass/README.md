@@ -1,5 +1,7 @@
 Allows the tank to pass control to another player.
 
+Original: https://forums.alliedmods.net/showpost.php?p=2841587&postcount=25
+
 v2.7.0
 
 ------
