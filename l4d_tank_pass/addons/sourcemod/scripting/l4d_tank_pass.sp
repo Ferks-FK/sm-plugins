@@ -57,6 +57,7 @@ ConVar g_hCvarTankHealth, g_hCvarTankBonusHealth;
 // debug cvar + anti-double-count guard
 bool g_bCvarDebug;
 bool g_bForcingPass;   // reentrancy guard: true while WE are executing a frustration pass, so nested forwards/replace events don't loop or double-count
+bool g_bFrustrationPass; // true only during a frustration pass; tells TransferPass to skip its increment
 int g_iPendingPassTank = -1;    // userid of tank waiting for a deferred frustration pass (-1 = none)
 int g_iPendingPassTarget = -1;  // userid of the chosen human target
 
@@ -319,8 +320,10 @@ void Frame_ExecutePass(any data)
 	int newCount = g_iPassedCount[tank] + 1;
 
 	g_bForcingPass = true;
+	g_bFrustrationPass = true;
 	PrintDebug("  -> executing deferred pass tank=%d -> target=%d (count -> %d/%d)", tank, target, newCount, g_iCvarPassedCount);
-	TankPass(tank, target, 0, true);   // frustration
+	TankPass(tank, target, 0, true);
+	g_bFrustrationPass = false;
 	g_bForcingPass = false;
 
 	// Apply count to whoever holds the tank now.
@@ -757,13 +760,15 @@ public void OnClientPutInServer(int client)
 
 public void Event_RoundStart(Event h_Event, char[] s_Name, bool b_DontBroadcast)
 {
-	for (int i = 1; i <= MaxClients; i++)
-		ResetPassData(i);
+    for (int i = 1; i <= MaxClients; i++)
+        ResetPassData(i);
 
-	g_bIsFinale = false;
-	g_iPendingPassTank = -1;
-	g_iPendingPassTarget = -1;
-	PrintDebug("round_start: pass data reset for all clients.");
+    g_bIsFinale = false;
+    g_iPendingPassTank = -1;
+    g_iPendingPassTarget = -1;
+    g_bFrustrationPass = false;
+    g_bForcingPass = false;
+    PrintDebug("round_start: pass data reset for all clients.");
 }
 
 public void Event_FinalStart(Event h_Event, char[] s_Name, bool b_DontBroadcast)
@@ -972,7 +977,7 @@ void TransferPass(int tank, int newtank, bool count = true)
 {
 	// during a forced frustration pass, TankPass() already handled counting via SetPassCount;
 	// skip the native-event increment to avoid double counting.
-	if (count && g_bForcingPass)
+	if (count && g_bFrustrationPass)
 	{
 		PrintDebug("TransferPass: guard active, skip increment tank=%d newtank=%d", tank, newtank);
 		count = false;
