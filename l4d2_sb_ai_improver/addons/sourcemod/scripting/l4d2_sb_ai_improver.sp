@@ -301,6 +301,12 @@ static int g_iSurvivorBot_PinnedFriend[MAXPLAYERS+1];
 static int g_iSurvivorBot_WitchTarget[MAXPLAYERS+1];
 static bool g_bSurvivorBot_IsWitchHarasser[MAXPLAYERS+1];
 
+// Debounces how often the "go help against the witch" move order gets re-aimed at her latest position.
+// Without this, a moving witch causes SetMoveToPosition to be called fresh every tick, and any transient
+// "unreachable" verdict on that exact point clears it immediately - the two together made the bot replace
+// its own order every tick forever, so the real BOT_CMD_MOVE never survived long enough to fire.
+static float g_fSurvivorBot_NextWitchMoveUpdateTime[MAXPLAYERS+1];
+
 static bool g_bSurvivorBot_PreventFire[MAXPLAYERS+1];
 
 static bool g_bClient_IsLookingAtPosition[MAXPLAYERS+1];
@@ -321,6 +327,34 @@ static float g_fSurvivorBot_MeleeApproachTime[MAXPLAYERS+1];
 static float g_fSurvivorBot_MeleeAttackTime[MAXPLAYERS+1];
 
 static float g_fSurvivorBot_TimeSinceLeftLadder[MAXPLAYERS+1];
+
+// --- Cache de LBI_IsPathToPositionDangerous ---------------------------------
+// Sem cache, o A* do nav mesh roda a cada think de cada bot enquanto o Tank
+// esta em jogo, o que estoura o frame no spawn (pico medido: 138ms).
+// Slots separados: regroup e resgate tem DESTINOS diferentes; um slot so
+// fazia um sobrescrever a resposta do outro.
+#define LBI_PDSLOT_REGROUP        0
+#define LBI_PDSLOT_RESCUE         1
+#define LBI_PATHDANGER_SLOTS      2
+
+// Cooldown assimetrico pelo EFEITO do retorno, nao pelo valor:
+//   -1 -> Plugin_Continue: nao interfere, pode durar mais no cache
+//    0 -> hResult DONE: bot ABANDONA a acao e fica parado
+//   >0 -> CHANGE_TO retirada: bot recua
+// Os dois ultimos bloqueiam o bot, entao precisam expirar rapido.
+#define LBI_PATHDANGER_COOLDOWN   0.35    // resultado neutro (-1)
+#define LBI_PATHDANGER_CD_BLOCK   0.12    // resultado que bloqueia (0 ou >0)
+#define LBI_PATHDANGER_GOALTOL    16384.0 // 128 unidades, ao quadrado
+
+static float g_fPathDanger_NextCheck[MAXPLAYERS+1][LBI_PATHDANGER_SLOTS];
+static int   g_iPathDanger_Cached[MAXPLAYERS+1][LBI_PATHDANGER_SLOTS];
+static float g_fPathDanger_CachedGoal[MAXPLAYERS+1][LBI_PATHDANGER_SLOTS][3];
+static bool  g_bPathDanger_HasCache[MAXPLAYERS+1][LBI_PATHDANGER_SLOTS];
+
+// Offsets de bounding box do jogador. Resolvidos uma vez: todo jogador e
+// CTerrorPlayer, entao refazer a busca por string a cada tick e desperdicio.
+static int g_iOffs_vecMins = -1;
+static int g_iOffs_vecMaxs = -1;
 
 static int g_iSurvivorBot_DefibTarget[MAXPLAYERS+1];
 
@@ -547,6 +581,9 @@ public void OnPluginStart()
     if (!hGameConfig)SetFailState("Failed to find 'l4d2_improved_bots.txt' game config.");
 
     CreateAllSDKCalls(hGameConfig);
+
+    g_iOffs_vecMins = FindSendPropInfo("CTerrorPlayer", "m_vecMins");
+    g_iOffs_vecMaxs = FindSendPropInfo("CTerrorPlayer", "m_vecMaxs");
     CreateAllDetours(hGameConfig);
 
     delete hGameConfig;
@@ -1201,6 +1238,11 @@ void ResetClientPluginVariables(int iClient)
 	g_iSurvivorBot_DefibTarget[iClient] = -1;
 	g_iSurvivorBot_Grenade_ThrowTarget[iClient] = -1;
 	g_iSurvivorBot_MovePos_Priority[iClient] = 0;
+	for (int iSlot = 0; iSlot < LBI_PATHDANGER_SLOTS; iSlot++)
+	{
+		g_bPathDanger_HasCache[iClient][iSlot] = false;
+		g_fPathDanger_NextCheck[iClient][iSlot] = 0.0;
+	}
 	
 	g_sSurvivorBot_MovePos_Name[iClient][0] = 0;
 	g_fSurvivorBot_MovePos_Tolerance[iClient] = -1.0;
@@ -1414,7 +1456,7 @@ public Action OnPlayerRunCmd(int iClient, int &iButtons, int &iImpulse, float fV
 	GetClientEyePosition(iClient, g_fClientEyePos[iClient]);
 	g_fClientEyeAng[iClient] = fAngles;
 	GetClientAbsOrigin(iClient, g_fClientAbsOrigin[iClient]);
-	GetEntityCenteroid(iClient, g_fClientCenteroid[iClient]);
+	GetPlayerCenteroidFast(iClient, g_fClientAbsOrigin[iClient], g_fClientCenteroid[iClient]);
 	g_iClientNavArea[iClient] = L4D_GetLastKnownArea(iClient);
 
 	if (!IsClientSurvivor(iClient))
@@ -2058,8 +2100,9 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 						ClearMoveToPosition(iClient, "GoToWitch");
 					}
 				}
-				else if (iWitchHarasser != iClient && fWitchDist <= 4000000.0)
+				else if (iWitchHarasser != iClient && fWitchDist <= 4000000.0 && GetGameTime() > g_fSurvivorBot_NextWitchMoveUpdateTime[iClient])
 				{
+					g_fSurvivorBot_NextWitchMoveUpdateTime[iClient] = GetGameTime() + 1.0;
 					SetMoveToPosition(iClient, fWitchOrigin, 3, "GoToWitch", 0.0, ((bWitchVisible && !L4D_IsPlayerIncapacitated(iWitchHarasser)) ? (fShootRange > 192.0 ? 192.0 : fShootRange) : 0.0), true);
 				}
 			}
@@ -5407,6 +5450,26 @@ stock bool GetEntityAbsOrigin(int iEntity, float fResult[3])
 	return (IsValidVector(fResult));
 }
 
+// Versao para JOGADORES, usada no caminho quente (OnPlayerRunCmd).
+// Reaproveita a abs origin ja lida pelo chamador e usa offsets em cache,
+// evitando CalcAbsolutePosition + 3 resolucoes de propriedade por string.
+void GetPlayerCenteroidFast(int iClient, const float fAbsOrigin[3], float fResult[3])
+{
+	if (g_iOffs_vecMins == -1 || g_iOffs_vecMaxs == -1)
+	{
+		GetEntityCenteroid(iClient, fResult);
+		return;
+	}
+
+	float fMins[3], fMaxs[3];
+	GetEntDataVector(iClient, g_iOffs_vecMins, fMins);
+	GetEntDataVector(iClient, g_iOffs_vecMaxs, fMaxs);
+
+	fResult[0] = fAbsOrigin[0] + (fMins[0] + fMaxs[0]) * 0.5;
+	fResult[1] = fAbsOrigin[1] + (fMins[1] + fMaxs[1]) * 0.5;
+	fResult[2] = fAbsOrigin[2] + (fMins[2] + fMaxs[2]) * 0.5;
+}
+
 stock bool GetEntityCenteroid(int iEntity, float fResult[3])
 {
 	int iOffset; static char sClass[64];
@@ -5891,11 +5954,47 @@ MRESReturn DTR_OnFindUseEntity(int iClient, Handle hReturn, Handle hParams)
 	return MRES_ChangedOverride;
 }
 
-int LBI_IsPathToPositionDangerous(int iClient, float fGoalPos[3])
+int LBI_IsPathToPositionDangerous(int iClient, float fGoalPos[3], int iSlot = LBI_PDSLOT_REGROUP)
 {
 	if (!g_bMapStarted)return -1;
 
-	if (L4D2_IsTankInPlay())
+	// Fora de combate com Tank o corpo original ja retornava -1 de imediato.
+	if (!L4D2_IsTankInPlay())
+	{
+		g_bPathDanger_HasCache[iClient][LBI_PDSLOT_REGROUP] = false;
+		g_bPathDanger_HasCache[iClient][LBI_PDSLOT_RESCUE]  = false;
+		return -1;
+	}
+
+	float fNow = GetGameTime();
+
+	// Cache valido: mesmo destino (dentro da tolerancia) e dentro do cooldown.
+	if (g_bPathDanger_HasCache[iClient][iSlot]
+		&& fNow < g_fPathDanger_NextCheck[iClient][iSlot]
+		&& GetVectorDistance(g_fPathDanger_CachedGoal[iClient][iSlot], fGoalPos, true) <= LBI_PATHDANGER_GOALTOL)
+	{
+		return g_iPathDanger_Cached[iClient][iSlot];
+	}
+
+	int iResult = LBI_IsPathToPositionDangerous_Compute(iClient, fGoalPos);
+
+	// Qualquer resultado != -1 impede o bot de seguir (DONE ou retirada).
+	// Expira rapido para ele reavaliar assim que o Tank sair do caminho.
+	float fCooldown = (iResult != -1) ? LBI_PATHDANGER_CD_BLOCK : LBI_PATHDANGER_COOLDOWN;
+
+	// O jitter evita que os 3-4 bots recalculem todos no mesmo frame,
+	// que e exatamente o que acontecia no spawn do Tank.
+	g_fPathDanger_NextCheck[iClient][iSlot]  = fNow + fCooldown + GetRandomFloat(0.0, 0.08);
+	g_iPathDanger_Cached[iClient][iSlot]     = iResult;
+	g_fPathDanger_CachedGoal[iClient][iSlot] = fGoalPos;
+	g_bPathDanger_HasCache[iClient][iSlot]   = true;
+
+	return iResult;
+}
+
+int LBI_IsPathToPositionDangerous_Compute(int iClient, float fGoalPos[3])
+{
+	// IsTankInPlay ja foi verificado pelo wrapper acima.
 	{
 		ArrayList hTankList = new ArrayList();
 		float fGoalOffset[3]; fGoalOffset = fGoalPos; fGoalOffset[2] += HUMAN_HALF_HEIGHT;
@@ -6017,7 +6116,7 @@ Action OnMoveToIncapacitatedFriendAction(BehaviorAction hAction, int iActor, flo
 	if (!IsValidClient(iFriend) || L4D_GetPlayerReviveTarget(iActor) == iFriend || GetClientDistance(iActor, iFriend, true) <= 15625.0 && IsVisibleEntity(iActor, iFriend))
 		return Plugin_Continue;
 
-	int iPathDangerous = LBI_IsPathToPositionDangerous(iActor, g_fClientAbsOrigin[iFriend]);
+	int iPathDangerous = LBI_IsPathToPositionDangerous(iActor, g_fClientAbsOrigin[iFriend], LBI_PDSLOT_RESCUE);
 	if (iPathDangerous == -1)return Plugin_Continue;
 
 	if (iPathDangerous != 0)
