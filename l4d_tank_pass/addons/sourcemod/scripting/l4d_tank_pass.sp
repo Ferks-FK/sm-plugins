@@ -285,7 +285,11 @@ public Action L4D_OnTryOfferingTankBot(int tank_index, bool &enterStatis)
 	}
 
 	// Passes exhausted -> allow AI
-	PrintDebug("  -> passes exhausted (%d >= %d). Continue -> AI.", g_iPassedCount[tank_index], g_iCvarPassedCount);
+	// Passes exhausted. We must restore the native counter to a value that makes the game
+	// send the tank to AI on its own. During forced passes we kept it at 0 (so the game
+	// wouldn't force AI early); now we set it to 2, the native threshold that triggers the bot.
+	L4D2Direct_SetTankPassedCount(2);
+	PrintDebug("  -> passes exhausted (%d >= %d). nativePassed set to 2. Continue -> AI.", g_iPassedCount[tank_index], g_iCvarPassedCount);
 	return Plugin_Continue;
 }
 
@@ -763,11 +767,11 @@ public void Event_RoundStart(Event h_Event, char[] s_Name, bool b_DontBroadcast)
     for (int i = 1; i <= MaxClients; i++)
         ResetPassData(i);
 
+    g_bFrustrationPass = false;
+    g_bForcingPass = false;
     g_bIsFinale = false;
     g_iPendingPassTank = -1;
     g_iPendingPassTarget = -1;
-    g_bFrustrationPass = false;
-    g_bForcingPass = false;
     PrintDebug("round_start: pass data reset for all clients.");
 }
 

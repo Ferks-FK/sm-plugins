@@ -1,0 +1,33 @@
+"Phrases"
+{
+	"AllTalkEnabledByKiller"
+	{
+		"#format"	"{1:s},{2:d}"
+		"en"		"{olive}[AllTalk] {default}Tank killed by {green}{1}{default}! All talk has been enabled for {green}{2} seconds{default}."
+		"pt"		"{olive}[AllTalk] {default}Tank abatido por {green}{1}{default}! O all talk foi ativado por {green}{2} segundos{default}."
+		"es"		"{olive}[AllTalk] {default}Tank abatido por {green}{1}{default}! El all talk fue activado por {green}{2} segundos{default}."
+	}
+
+	"AllTalkEnabledGeneric"
+	{
+		"#format"	"{1:d}"
+		"en"		"{olive}[AllTalk] {default}The Tank is dead! All talk has been enabled for {green}{1} seconds{default}."
+		"pt"		"{olive}[AllTalk] {default}O Tank morreu! O all talk foi ativado por {green}{1} segundos{default}."
+		"es"		"{olive}[AllTalk] {default}El Tank ha muerto! El all talk fue activado por {green}{1} segundos{default}."
+	}
+
+	"AllTalkEnabledRoundEnd"
+	{
+		"#format"	"{1:d}"
+		"en"		"{olive}[AllTalk] {default}Round over! All talk has been enabled for {green}{1} seconds{default}."
+		"pt"		"{olive}[AllTalk] {default}Fim de rodada! O all talk foi ativado por {green}{1} segundos{default}."
+		"es"		"{olive}[AllTalk] {default}Fin de la ronda! El all talk fue activado por {green}{1} segundos{default}."
+	}
+
+	"AllTalkDisabled"
+	{
+		"en"		"{olive}[AllTalk] {default}All talk has been disabled."
+		"pt"		"{olive}[AllTalk] {default}O all talk foi desativado."
+		"es"		"{olive}[AllTalk] {default}El all talk fue desactivado."
+	}
+}
