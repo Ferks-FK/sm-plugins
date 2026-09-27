@@ -1,4 +1,4 @@
-#define PLUGIN_VERSION "2.8.0"
+#define PLUGIN_VERSION "2.8.1"
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -891,15 +891,19 @@ public void Event_BotPlayerReplace(Event h_Event, char[] s_Name, bool b_DontBroa
 	int bot = GetClientOfUserId(h_Event.GetInt("bot"));
 	int client = GetClientOfUserId(h_Event.GetInt("player"));
 
-	// a human took over a Tank bot (initial spawn handover, admin take, etc.)
-	if (IsClientAndInGame(client) && !IsFakeClient(client) && IsAliveTank(client))
+	// a human took over a Tank bot (initial spawn handover, replacement after a disconnect, admin take, etc.)
+	bool humanTank = IsClientAndInGame(client) && !IsFakeClient(client) && IsAliveTank(client);
+	if (humanTank)
 		MarkHadTank(client);
 
 	// during a frustration pass the count is pending, so even a 0 count must go through TransferPass
-	if (!g_iPassedCount[bot] && !g_bFrustrationPass) return;
-
-	if (IsReplaceableTank(bot, client))
+	if ((g_iPassedCount[bot] || g_bFrustrationPass) && IsReplaceableTank(bot, client))
 		TransferPass(bot, client, false);
+
+	// every bot -> human handover consumes a native pass (TankPassedCount goes up), which can make
+	// the game send the NEXT frustration straight to AI. Re-arm it from the plugin's own count.
+	if (humanTank && g_iCvarPassedCount)
+		ArmNativeCounter(client);
 }
 
 public void L4D_OnReplaceTank(int tank, int newtank)
