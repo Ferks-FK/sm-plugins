@@ -1,4 +1,4 @@
-#define PLUGIN_VERSION "2.7.0"
+#define PLUGIN_VERSION "2.8.0"
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -57,9 +57,12 @@ ConVar g_hCvarTankHealth, g_hCvarTankBonusHealth;
 // debug cvar + anti-double-count guard
 bool g_bCvarDebug;
 bool g_bForcingPass;   // reentrancy guard: true while WE are executing a frustration pass, so nested forwards/replace events don't loop or double-count
-bool g_bFrustrationPass; // true only during a frustration pass; tells TransferPass to skip its increment
-int g_iPendingPassTank = -1;    // userid of tank waiting for a deferred frustration pass (-1 = none)
-int g_iPendingPassTarget = -1;  // userid of the chosen human target
+bool g_bFrustrationPass; // true while a frustration pass is in progress (native "X gets Tank" window); tells TransferPass to skip its increment
+int g_iFrustPassCount;   // pass count the new holder will receive when the frustration pass completes
+int g_iFrustPassSerial;  // identifies the current frustration pass for its safety timeout
+
+bool g_bCvarUnique;
+bool g_bHadTank[MAXPLAYERS+1]; // player already controlled the current Tank (cleared when no Tank is alive)
 
 int ZC_TANK;
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
@@ -157,6 +160,10 @@ public void OnPluginStart()
 	g_bCvarConfirm = cVar.BoolValue;
 	cVar.AddChangeHook(OnCvarChange_Confirm);
 
+	cVar = CreateConVar("l4d_tank_pass_unique", "1", "0=Off, 1=Frustration prefers players who haven't controlled the current Tank yet (repeats only when everyone already had it).", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+	g_bCvarUnique = cVar.BoolValue;
+	cVar.AddChangeHook(OnCvarChange_Unique);
+
 	cVar = CreateConVar("l4d_tank_pass_debug", "0", "0=Off, 1=Print debug messages to server console/chat for pass logic.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_bCvarDebug = cVar.BoolValue;
 	cVar.AddChangeHook(OnCvarChange_Debug);
@@ -205,16 +212,25 @@ public void OnCvarChange_Debug(ConVar convar, const char[] oldValue, const char[
 	if (!StrEqual(oldValue, newValue))
 		g_bCvarDebug = convar.BoolValue;
 }
+
+public void OnCvarChange_Unique(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+	if (!StrEqual(oldValue, newValue))
+		g_bCvarUnique = convar.BoolValue;
+}
 /*
 |--------------------------------------------------------------------------
 | OVERRIDE NATIVE 2-PASS LIMIT
 |--------------------------------------------------------------------------
-| The game natively only lets a Tank go to a human up to ~2 times per round
-| (L4D2Direct TankPassedCount), then forces AI. We intercept the moment the
-| engine tries to offer the Tank to a bot: while the plugin still has passes
-| left, we redirect to a random human and keep the native counter low so the
-| game never forces AI on its own. Only when the plugin limit is reached do we
-| let it go to AI.
+| The game decides "offer to a human" vs "replace with AI" from the native
+| TankPassedCount (>1 = AI) at the moment frustration reaches 0, BEFORE this
+| forward fires. So the native counter must already hold the right value when
+| frustration runs out: 0 while the plugin still has passes, 2 once the limit
+| is reached (see FinishFrustrationPass / SetPassCount).
+|
+| While passes remain, we let the engine run its own "X gets Tank" window and
+| only steer the lottery (tickets) to a random human. The pass is counted and
+| announced when the new player actually receives the Tank (TransferPass).
 */
 public Action L4D_OnTryOfferingTankBot(int tank_index, bool &enterStatis)
 {
@@ -255,109 +271,128 @@ public Action L4D_OnTryOfferingTankBot(int tank_index, bool &enterStatis)
 	// Passes still available?
 	if (g_iPassedCount[tank_index] < g_iCvarPassedCount)
 	{
+		if (g_bFrustrationPass)
+		{
+			PrintDebug("  -> a frustration pass is already in progress. Continue.");
+			return Plugin_Continue;
+		}
+
 		int target = FindRandomInfectedHuman(tank_index);
 		PrintDebug("  -> passes left (%d < %d). Random human target=%d", g_iPassedCount[tank_index], g_iCvarPassedCount, target);
 
 		if (target == -1)
 		{
-			PrintDebug("  -> no human available. Continue (engine may send to AI).");
+			PrintDebug("  -> no other infected human available. Continue (engine decides, usually AI).");
 			return Plugin_Continue;
 		}
 
-		// IMPORTANT: we must NOT execute the pass here. This forward fires from *inside* the
-		// engine's OnTryOfferingTankBot routine; calling TankPass() (which re-enters
-		// ReplaceTank / TryOfferingTankBot) reenters the engine mid-routine and crashes it
-		// (null deref). Instead we defer execution to the next frame, once the engine has
-		// finished its own routine and state is stable.
-		if (g_iPendingPassTank != -1)
-		{
-			PrintDebug("  -> a deferred pass is already queued, skipping to avoid overlap. Continue.");
-			return Plugin_Continue;
-		}
+		// Do NOT execute the pass here: this forward fires from *inside* the engine's
+		// TryOfferingTankBot routine, and calling ReplaceTank / TryOfferingTankBot from here
+		// crashes the server. We only write lottery tickets (plain memory writes) and let
+		// the engine show its own "X gets Tank" window and hand over the Tank itself.
+		for (int i = 1; i <= MaxClients; i++)
+			if (i != target && IsInfected(i) && !IsFakeClient(i))
+				L4D2Direct_SetTankTickets(i, 0);
+		L4D2Direct_SetTankTickets(target, 10000);
 
-		g_iPendingPassTank = GetClientUserId(tank_index);
-		g_iPendingPassTarget = GetClientUserId(target);
-		RequestFrame(Frame_ExecutePass);
+		if (IsMustIgnite(IsOnFire(tank_index)))
+			g_bIsIgnited[tank_index] = true;
 
-		enterStatis = false;
-		PrintDebug("  -> queued deferred pass tank=%d -> target=%d (RequestFrame). Plugin_Handled (block AI now).", tank_index, target);
-		return Plugin_Handled;
+		g_iFrustPassCount = g_iPassedCount[tank_index] + 1;
+		if (g_iFrustPassCount > g_iCvarPassedCount)
+			g_iFrustPassCount = g_iCvarPassedCount;
+		g_bFrustrationPass = true;
+		L4D2Direct_SetTankPassedCount(0);
+		CreateTimer(20.0, Timer_FrustPassTimeout, ++g_iFrustPassSerial, TIMER_FLAG_NO_MAPCHANGE);
+
+		PrintDebug("  -> native window: tickets steered to target=%d, pending count %d/%d. Continue.", target, g_iFrustPassCount, g_iCvarPassedCount);
+		return Plugin_Continue;
 	}
 
-	// Passes exhausted -> allow AI
-	// Passes exhausted. We must restore the native counter to a value that makes the game
-	// send the tank to AI on its own. During forced passes we kept it at 0 (so the game
-	// wouldn't force AI early); now we set it to 2, the native threshold that triggers the bot.
+	// Passes exhausted. The native counter should already be 2 at this point (set when the
+	// last pass completed), so the engine would have sent the Tank to AI without calling
+	// this forward. Reaching here means something reset the counter; fix it for next time.
 	L4D2Direct_SetTankPassedCount(2);
-	PrintDebug("  -> passes exhausted (%d >= %d). nativePassed set to 2. Continue -> AI.", g_iPassedCount[tank_index], g_iCvarPassedCount);
+	PrintDebug("  -> WARNING: passes exhausted (%d >= %d) but engine is still offering to a human. nativePassed set to 2. Continue.", g_iPassedCount[tank_index], g_iCvarPassedCount);
 	return Plugin_Continue;
 }
 
-// Executed one frame after the forward, safely OUTSIDE the engine's OnTryOfferingTankBot call stack.
-void Frame_ExecutePass(any data)
+// Called when the new player receives the Tank after a frustration pass (from TransferPass).
+void FinishFrustrationPass(int newtank)
 {
-	int tank = GetClientOfUserId(g_iPendingPassTank);
-	int target = GetClientOfUserId(g_iPendingPassTarget);
-	g_iPendingPassTank = -1;
-	g_iPendingPassTarget = -1;
-
-	PrintDebug("Frame_ExecutePass: tank=%d target=%d", tank, target);
-
-	// Revalidate: players may have left / states may have changed during the frame gap.
-	if (!IsValidTank(tank))
-	{
-		PrintDebug("  -> tank no longer valid, aborting deferred pass.");
-		return;
-	}
-	if (!IsValidTarget(target))
-	{
-		// target gone; try another random human
-		target = FindRandomInfectedHuman(tank);
-		PrintDebug("  -> original target gone, re-picked target=%d", target);
-		if (target == -1)
-		{
-			PrintDebug("  -> still no human available, aborting (tank stays / engine decides next time).");
-			return;
-		}
-	}
-
-	int newCount = g_iPassedCount[tank] + 1;
-
-	g_bForcingPass = true;
-	g_bFrustrationPass = true;
-	PrintDebug("  -> executing deferred pass tank=%d -> target=%d (count -> %d/%d)", tank, target, newCount, g_iCvarPassedCount);
-	TankPass(tank, target, 0, true);
 	g_bFrustrationPass = false;
-	g_bForcingPass = false;
+	g_iPassedCount[newtank] = g_iFrustPassCount;
 
-	// Apply count to whoever holds the tank now.
-	int holder = GetTank();
-	if (holder == 0)
-		holder = target;
-	g_iPassedCount[holder] = newCount;
-	if (g_iPassedCount[holder] > g_iCvarPassedCount)
-		g_iPassedCount[holder] = g_iCvarPassedCount;
-
-	// Keep native counter low so the game never forces AI on its own.
-	L4D2Direct_SetTankPassedCount(0);
-
-	PrintDebug("  -> deferred pass done. applied count %d/%d to holder=%d. nativePassed reset to 0.", g_iPassedCount[holder], g_iCvarPassedCount, holder);
+	PrintToTeam(3, 0, "%t", "phrase15", newtank, g_iFrustPassCount, g_iCvarPassedCount);
+	PrintDebug("FinishFrustrationPass: newtank=%d count=%d/%d", newtank, g_iFrustPassCount, g_iCvarPassedCount);
 }
 
+// Arm the native counter for the holder's NEXT frustration: 2 = send to AI (limit reached),
+// 0 = offer to a human again. Must be set before frustration runs out.
+void ArmNativeCounter(int holder)
+{
+	bool toAI = g_iPassedCount[holder] >= g_iCvarPassedCount;
+	L4D2Direct_SetTankPassedCount(toAI ? 2 : 0);
+	PrintDebug("ArmNativeCounter: holder=%d count=%d/%d -> nativePassed=%d (%s)", holder, g_iPassedCount[holder], g_iCvarPassedCount, toAI ? 2 : 0, toAI ? "next frustration -> AI" : "next frustration -> human");
+}
+
+void MarkHadTank(int client)
+{
+	if (!g_bHadTank[client])
+		PrintDebug("MarkHadTank: client=%d now marked as having controlled this Tank.", client);
+	g_bHadTank[client] = true;
+}
+
+void ClearHadTank()
+{
+	for (int i = 1; i <= MaxClients; i++)
+		g_bHadTank[i] = false;
+}
+
+bool HasAliveTank()
+{
+	for (int i = 1; i <= MaxClients; i++)
+		if (IsAliveTank(i))
+			return true;
+	return false;
+}
+
+// Safety net: the window was cancelled or the Tank went to AI, so no transfer arrived.
+Action Timer_FrustPassTimeout(Handle timer, int serial)
+{
+	if (g_bFrustrationPass && serial == g_iFrustPassSerial)
+	{
+		g_bFrustrationPass = false;
+		PrintDebug("Frustration pass timed out without a transfer to a human. Pending state cleared.");
+	}
+	return Plugin_Stop;
+}
+
+// Random infected human other than 'exclude'. With l4d_tank_pass_unique, players who haven't
+// controlled the current Tank yet take priority; only if all of them already had it can one repeat.
 int FindRandomInfectedHuman(int exclude)
 {
-	int candidates[MAXPLAYERS + 1];
-	int count = 0;
+	int fresh[MAXPLAYERS + 1], others[MAXPLAYERS + 1];
+	int freshCount, othersCount;
 	for (int i = 1; i <= MaxClients; i++)
 	{
 		if (i == exclude)
 			continue;
-		if (IsInfected(i) && !IsFakeClient(i) && !IsPlayerTank(i))
-			candidates[count++] = i;
+		if (!IsInfected(i) || IsFakeClient(i) || IsPlayerTank(i))
+			continue;
+
+		if (g_bCvarUnique && g_bHadTank[i])
+			others[othersCount++] = i;
+		else
+			fresh[freshCount++] = i;
 	}
-	if (count == 0)
-		return -1;
-	return candidates[GetRandomInt(0, count - 1)];
+	if (freshCount)
+		return fresh[GetRandomInt(0, freshCount - 1)];
+	if (othersCount){
+		PrintDebug("FindRandomInfectedHuman: everyone already controlled this Tank, allowing a repeat.");
+		return others[GetRandomInt(0, othersCount - 1)];
+	}
+	return -1;
 }
 /*
 |--------------------------------------------------------------------------
@@ -537,8 +572,9 @@ void TankPassMenu(int client, int menuType = Menu_Pass)
 	// Sort by name
 	SortCustom1D(players, count, SortPlayersByName);
 
-	// Add to menu
+	// Add to menu, marking who already controlled the current Tank: [V] = yes, [X] = no
 	char name[MAX_NAME_LENGTH];
+	char display[MAX_NAME_LENGTH + 8];
 	char sId[12];
 
 	for (int i = 0; i < count; i++)
@@ -546,8 +582,9 @@ void TankPassMenu(int client, int menuType = Menu_Pass)
 		int userid = GetClientUserId(players[i]);
 		IntToString(userid, sId, sizeof(sId));
 		GetClientName(players[i], name, sizeof(name));
+		FormatEx(display, sizeof(display), "%s %s", name, g_bHadTank[players[i]] ? "[V]" : "[X]");
 
-		menu.AddItem(sId, name);
+		menu.AddItem(sId, display);
 	}
 
 	if (!hasTarget){
@@ -758,20 +795,21 @@ public Action Command_TakeTank(int client, int args)
 */
 public void OnClientPutInServer(int client)
 {
-	if (client)
+	if (client){
 		ResetPassData(client);
+		g_bHadTank[client] = false;
+	}
 }
 
 public void Event_RoundStart(Event h_Event, char[] s_Name, bool b_DontBroadcast)
 {
     for (int i = 1; i <= MaxClients; i++)
         ResetPassData(i);
+    ClearHadTank();
 
     g_bFrustrationPass = false;
     g_bForcingPass = false;
     g_bIsFinale = false;
-    g_iPendingPassTank = -1;
-    g_iPendingPassTarget = -1;
     PrintDebug("round_start: pass data reset for all clients.");
 }
 
@@ -786,6 +824,7 @@ public void Event_TankSpawn(Event h_Event, char[] s_Name, bool b_DontBroadcast)
 
 	if (IsClientAndInGame(client) && !IsFakeClient(client)){
 		ResetPassData(client);
+		MarkHadTank(client);
 		if (!g_bCvarNotify) return;
 
 		g_bIsBlocked[client] = true;
@@ -827,6 +866,12 @@ public void OnEntKilled(int client)
 {
 	if (!IsAliveTank(client))
 		ResetPassData(client);
+
+	// Tank is gone: the next Tank starts with everyone eligible again
+	if (!HasAliveTank()){
+		ClearHadTank();
+		PrintDebug("No Tank alive anymore: 'already controlled' list cleared.");
+	}
 }
 
 public void Event_PlayerBotReplace(Event h_Event, char[] s_Name, bool b_DontBroadcast)
@@ -844,8 +889,14 @@ public void Event_PlayerBotReplace(Event h_Event, char[] s_Name, bool b_DontBroa
 public void Event_BotPlayerReplace(Event h_Event, char[] s_Name, bool b_DontBroadcast)
 {
 	int bot = GetClientOfUserId(h_Event.GetInt("bot"));
-	if (!g_iPassedCount[bot]) return;
 	int client = GetClientOfUserId(h_Event.GetInt("player"));
+
+	// a human took over a Tank bot (initial spawn handover, admin take, etc.)
+	if (IsClientAndInGame(client) && !IsFakeClient(client) && IsAliveTank(client))
+		MarkHadTank(client);
+
+	// during a frustration pass the count is pending, so even a 0 count must go through TransferPass
+	if (!g_iPassedCount[bot] && !g_bFrustrationPass) return;
 
 	if (IsReplaceableTank(bot, client))
 		TransferPass(bot, client, false);
@@ -884,11 +935,11 @@ public void OnFrameIgnite(int client)
 | FUNCTIONS
 |--------------------------------------------------------------------------
 */
-void TankPass(int tank, int target, int admin = 0, bool auto = false)
+void TankPass(int tank, int target, int admin = 0)
 {
-	// guard the whole routine. Quick-pass calls L4D2Direct_TryOfferingTankBot() below,
+	// guard the whole routine. The window path calls L4D2Direct_TryOfferingTankBot() below,
 	// which re-fires our L4D_OnTryOfferingTankBot; without this guard that forward would
-	// queue a SECOND (frustration) pass, duplicating the chat message and fighting this
+	// start a SECOND (frustration) pass, duplicating the chat message and fighting this
 	// pass for the tank (intermittent "message twice / control not passed" bug).
 	bool bWasForcing = g_bForcingPass;
 	g_bForcingPass = true;
@@ -897,8 +948,6 @@ void TankPass(int tank, int target, int admin = 0, bool auto = false)
 		PrintToTeam(3, 0, "%t", "phrase9", target);
 		LogAction(admin, target, "\"%L\" has passed the Tank from \"%L\" to \"%L\"", admin, tank, target);
 	}
-	else if (auto)   // automatic pass caused by frustration
-		PrintToTeam(3, 0, "%t", "phrase15", target, g_iPassedCount[tank] + 1, g_iCvarPassedCount);
 	else if (g_iCvarPassedCount == 1)
 		PrintToTeam(3, 0, "%t", "phrase3", tank, target);
 	else
@@ -949,7 +998,7 @@ void TankPass(int tank, int target, int admin = 0, bool auto = false)
 	Call_PushCell(target);
 	Call_Finish();
 
-	// restore guard to whatever it was before (so nested calls from Frame_ExecutePass still behave)
+	// restore guard to whatever it was before
 	g_bForcingPass = bWasForcing;
 }
 
@@ -959,9 +1008,22 @@ void TakeOverTank(int admin, int target)
 
 	if (tank && IsValidTarget(target)){
 		int currentHealth = GetEntProp(tank, Prop_Data, "m_iHealth");
+		// read before the takeover: the bot inherited the count when the last holder lost the Tank
+		int passCount = g_iPassedCount[tank];
 
 		L4D_TakeOverZombieBot(target, tank);
-		L4D2Direct_SetTankPassedCount(g_iTakeOverPassedCount);
+
+		if (g_iCvarPassedCount && passCount >= g_iCvarPassedCount){
+			// pass limit already reached for this Tank: keep it, so the next frustration goes to AI
+			// (l4d_tank_pass_takeover would otherwise re-enable a pass to another player)
+			g_iPassedCount[target] = passCount;
+			L4D2Direct_SetTankPassedCount(2);
+			PrintDebug("TakeOverTank: target=%d took Tank bot=%d with passes exhausted (%d/%d). nativePassed=2 -> next frustration goes to AI.", target, tank, passCount, g_iCvarPassedCount);
+		}
+		else {
+			L4D2Direct_SetTankPassedCount(g_iTakeOverPassedCount);
+			PrintDebug("TakeOverTank: target=%d took Tank bot=%d (count %d/%d). nativePassed=%d (l4d_tank_pass_takeover).", target, tank, passCount, g_iCvarPassedCount, g_iTakeOverPassedCount);
+		}
 
 		SetEntProp(target, Prop_Data, "m_iHealth", currentHealth);
 		SetEntProp(target, Prop_Send, "m_iHealth", currentHealth);
@@ -979,7 +1041,7 @@ void SetPassCount(int tank, bool offer = false)
 
 void TransferPass(int tank, int newtank, bool count = true)
 {
-	// during a forced frustration pass, TankPass() already handled counting via SetPassCount;
+	// during a frustration pass the count is applied once by FinishFrustrationPass;
 	// skip the native-event increment to avoid double counting.
 	if (count && g_bFrustrationPass)
 	{
@@ -996,6 +1058,17 @@ void TransferPass(int tank, int newtank, bool count = true)
 	g_iPassedCount[newtank] = g_iPassedCount[tank];
 
 	PrintDebug("TransferPass: tank=%d -> newtank=%d counted=%d finalCount=%d/%d", tank, newtank, count, g_iPassedCount[newtank], g_iCvarPassedCount);
+
+	if (IsClientAndInGame(newtank) && !IsFakeClient(newtank)){
+		MarkHadTank(newtank);
+
+		// the frustration window ended and a human now holds the Tank
+		if (g_bFrustrationPass)
+			FinishFrustrationPass(newtank);
+
+		if (g_iCvarPassedCount)
+			ArmNativeCounter(newtank);
+	}
 
 	ResetPassData(tank);
 }
