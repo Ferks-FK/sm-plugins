@@ -35,7 +35,7 @@ bool
 int
 	g_iWasTankAI            = 0,
 	g_iOffset_Incapacitated = 0,        // Used to check if tank is dying
-	g_iTankClient           = 0,        // Which client is currently playing as tank
+	g_iTankUserId           = 0,        // userid of the player currently playing as tank (not the client index: indexes get reused after a disconnect)
 	g_iLastTankHealth       = 0,        // Used to award the killing blow the exact right amount of damage
 	g_iSurvivorLimit        = 4,        // For survivor array in damage print
 	g_iDamage[MAXPLAYERS + 1];
@@ -72,6 +72,12 @@ GlobalForward
 * - Added an optional reward: the survivor who dealt the most damage to the tank
 *   receives pain pills on tank death if their light-health slot is empty
 *   (cvar l4d_tankdamage_reward_pills).
+*
+* Version 0.7.1
+* - Fixed the damage announce (and pills reward) being delayed, sometimes by more
+*   than a minute, when the tank's controller disconnected: the tank was tracked by
+*   client index, which could be reused by another player after the disconnect.
+*   The tank is now identified by its class and its controller by userid.
 */
 
 public Plugin myinfo =
@@ -79,7 +85,7 @@ public Plugin myinfo =
 	name = "Tank Damage Announce L4D2",
 	author = "Griffin and Blade, Ferks-FK",
 	description = "Announce damage dealt to tanks by survivors",
-	version = "0.7.0",
+	version = "0.7.1",
 	url = "https://github.com/SirPlease/L4D2-Competitive-Rework"
 };
 
@@ -89,7 +95,7 @@ public void OnPluginStart()
 
 	g_bIsTankInPlay = false;
 	g_bAnnounceTankDamage = false;
-	g_iTankClient = 0;
+	g_iTankUserId = 0;
 	ClearTankDamage();
 
 	HookEvent("tank_spawn", Event_TankSpawn);
@@ -127,12 +133,18 @@ public void OnMapStart()
     PrecacheSound("ui/pickup_secret01.wav");
 }
 
-public void OnClientDisconnect_Post(int client)
+public void OnClientDisconnect(int client)
 {
-	if (!g_bIsTankInPlay || client != g_iTankClient) {
+	// Their slot can be reused by another player: don't carry this player's damage over
+	g_iDamage[client] = 0;
+	g_bWasTank[client] = false;
+
+	if (!g_bIsTankInPlay || GetClientUserId(client) != g_iTankUserId) {
 		return;
 	}
-	CreateTimer(0.1, Timer_CheckTank, client); // Use a delayed timer due to bugs where the tank passes to another player
+	// The Tank goes to a bot or another player when its controller leaves: give it a moment,
+	// then only announce if no Tank is alive anymore
+	CreateTimer(0.5, Timer_CheckTank);
 }
 
 void Cvar_Enabled(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -186,11 +198,12 @@ void Event_PlayerHurt(Event event, const char[] name, bool dontBroadcast)
 	}
 
 	int victim = GetClientOfUserId(event.GetInt("userid"));
-	if (victim != GetTankClient() ||    // Victim isn't tank; no damage to record
-		IsTankDying()                   // Something buggy happens when tank is dying with regards to damage
+	if (!IsTank(victim) ||      // Victim isn't tank; no damage to record
+		IsTankDying(victim)     // Something buggy happens when tank is dying with regards to damage
 	) {
 		return;
 	}
+	g_iTankUserId = GetClientUserId(victim); // Whoever is hurt as the Tank is its current controller
 
 	int attacker = GetClientOfUserId(event.GetInt("attacker"));
 	// We only care about damage dealt by survivors, though it can be funny to see
@@ -213,7 +226,7 @@ void Event_PlayerKilled(Event event, const char[] name, bool dontBroadcast)
 	}
 
 	int victim = GetClientOfUserId(event.GetInt("userid"));
-	if (victim != g_iTankClient) {
+	if (!IsTank(victim)) {
 		return;
 	}
 
@@ -231,8 +244,8 @@ void Event_PlayerKilled(Event event, const char[] name, bool dontBroadcast)
 	} else {
 		g_iWasTankAI = 1;
 	}
-	// Damage announce could probably happen right here...
-	CreateTimer(0.1, Timer_CheckTank, victim); // Use a delayed timer due to bugs where the tank passes to another player
+	// Use a delayed timer due to bugs where the tank passes to another player
+	CreateTimer(0.1, Timer_CheckTank);
 }
 
 void Event_TankSpawn(Event event, const char[] name, bool dontBroadcast)
@@ -244,7 +257,7 @@ void Event_TankSpawn(Event event, const char[] name, bool dontBroadcast)
     bool bWasBotControlled = bIsNewTank ? true : g_bTankControllerWasBot;
     bool bIsBotNow = IsFakeClient(client);
 
-    g_iTankClient = client;
+    g_iTankUserId = GetClientUserId(client);
 
     if (bIsNewTank) {
         // New tank, damage has not been announced
@@ -277,7 +290,7 @@ void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 	g_bPrintedHealth = false;
 	g_bIsTankInPlay = false;
 	g_bTankControllerWasBot = false;
-	g_iTankClient = 0;
+	g_iTankUserId = 0;
 	ClearTankDamage(); // Probably redundant
 }
 
@@ -292,16 +305,16 @@ void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
 	ClearTankDamage();
 }
 
-Action Timer_CheckTank(Handle timer, any oldtankclient)
+Action Timer_CheckTank(Handle timer)
 {
-	if (g_iTankClient != oldtankclient) {
-		return Plugin_Stop; // Tank passed
+	if (!g_bIsTankInPlay) {
+		return Plugin_Stop; // Already announced
 	}
 
 	int tankclient = FindTankClient();
-	if (tankclient && tankclient != oldtankclient) {
-		g_iTankClient = tankclient;
-		return Plugin_Stop; // Found tank, done
+	if (tankclient) {
+		g_iTankUserId = GetClientUserId(tankclient);
+		return Plugin_Stop; // Tank is still alive: it was passed or its controller left
 	}
 
 	if (g_bAnnounceTankDamage) {
@@ -316,12 +329,8 @@ Action Timer_CheckTank(Handle timer, any oldtankclient)
 	return Plugin_Stop;
 }
 
-bool IsTankDying()
+bool IsTankDying(int tankclient)
 {
-	int tankclient = GetTankClient();
-	if (!tankclient) {
-		return false;
-	}
 	return view_as<bool>(GetEntData(tankclient, g_iOffset_Incapacitated));
 }
 
@@ -355,7 +364,7 @@ void PrintTankDamage()
 
 	if (!g_bPrintedHealth) {
 		for (int i = 1; i <= MaxClients; i++) {
-			if (g_bWasTank[i]) {
+			if (g_bWasTank[i] && IsClientInGame(i)) {
 				char sName[MAX_NAME_LENGTH];
 				GetClientName(i, sName, sizeof(sName));
 				CPrintToChatAll("%t", "TankDamageHeader", sName);
@@ -380,6 +389,9 @@ void PrintTankDamage()
 	for (client = 1; client <= MaxClients; client++) {
 		if (!IsClientInGame(client) || GetClientTeam(client) != TEAM_SURVIVOR || g_iDamage[client] == 0) {
 			continue;
+		}
+		if (survivor_index + 1 >= g_iSurvivorLimit) {
+			break; // More survivors with damage than survivor_limit (e.g. limit lowered mid-round): don't overflow the array
 		}
 		survivor_index++;
 		survivor_clients[survivor_index] = client;
@@ -491,17 +503,21 @@ int GetTankClient()
 		return 0;
 	}
 
-	int tankclient = g_iTankClient;
+	int tankclient = GetClientOfUserId(g_iTankUserId);
 
-	if (!IsClientInGame(tankclient)) { // If tank somehow is no longer in the game (kicked, hence events didn't fire)
-		tankclient = FindTankClient();  // find the tank client
-		if (!tankclient) {
-			return 0;
-		}
-		g_iTankClient = tankclient;
+	if (!IsTank(tankclient)) { // Controller left or passed the Tank without an event we saw
+		tankclient = FindTankClient();
+		g_iTankUserId = tankclient ? GetClientUserId(tankclient) : 0;
 	}
 
 	return tankclient;
+}
+
+bool IsTank(int client)
+{
+	return client > 0 && client <= MaxClients && IsClientInGame(client)
+		&& GetClientTeam(client) == TEAM_INFECTED
+		&& GetEntProp(client, Prop_Send, "m_zombieClass") == ZOMBIECLASS_TANK;
 }
 
 int FindTankClient()
