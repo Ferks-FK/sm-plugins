@@ -1,0 +1,39 @@
+"Phrases"
+{
+    "Unpausing"
+    {
+        "en"        "{blue}[{default}AutoPause{blue}] {default}All {green}crashed {default}players have reconnected.. {blue}Unpausing{default}!"
+        "pt"        "{blue}[{default}AutoPause{blue}] {default}Todos os jogadores que {green}crasharam {default}reconectaram.. {blue}Despausando{default}!"
+        "es"        "{blue}[{default}AutoPause{blue}] {default}Todos los jugadores que {green}crashearon {default}se han reconectado.. ¡{blue}Reanudando{default}!"
+    }
+
+    "Waiting"
+    {
+        "#format"   "{1:i},{2:t}"   // 1: remainingCrashers 2: remainingCrashers > 1 ? "players" : "player"
+        "en"        "{blue}[{default}AutoPause{blue}] {default}Waiting for {olive}{1} {default}more {green}crashed {default}{2} before automatic {blue}Unpause{default}!"
+        "pt"        "{blue}[{default}AutoPause{blue}] {default}Aguardando mais {olive}{1} {default}{2} com {green}crash {default}antes de {blue}Despausar {default}automaticamente!"
+        "es"        "{blue}[{default}AutoPause{blue}] {default}¡Esperando a {olive}{1} {default}{2} más con {green}crash {default}antes de {blue}Reanudar {default}automáticamente!"
+    }
+
+    "Crashed"
+    {
+        "#format"   "{1:N}"         // 1: client
+        "en"        "{blue}[{default}AutoPause{blue}] {olive}{1} {default}crashed."
+        "pt"        "{blue}[{default}AutoPause{blue}] {olive}{1} {default}crashou."
+        "es"        "{blue}[{default}AutoPause{blue}] {olive}{1} {default}crasheó."
+    }
+
+    "players"
+    {
+        "en"        "players"
+        "pt"        "jogadores"
+        "es"        "jugadores"
+    }
+
+    "player"
+    {
+        "en"        "player"
+        "pt"        "jogador"
+        "es"        "jugador"
+    }
+}

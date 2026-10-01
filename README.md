@@ -16,6 +16,8 @@ SourceMod plugins for L4D(2) servers, mostly focused on Versus.
 | [l4d_tank_alltalk](l4d_tank_alltalk) | L4D2 | Enables `sv_alltalk` for a while after the Tank dies or the round ends |
 | [l4d_tank_damage_announce](l4d_tank_damage_announce) | L4D2 | Announces the damage each survivor dealt to the Tank |
 | [l4d_tank_pass](l4d_tank_pass) | L4D / L4D2 | Allows the Tank to pass control to another player |
+| [pause](pause) | L4D2 | Pause commands and auto-pause on crash, only in matches started by a mix |
+| [readyup](readyup) | L4D2 | Ready-up before each round, only in campaigns started by a mix |
 
 ## Installation
 

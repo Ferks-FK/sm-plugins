@@ -1,0 +1,269 @@
+"Phrases"
+{
+	"Tag"
+	{
+		"en"	"{default}[{green}!{default}]"
+		"pt"	"{default}[{green}!{default}]"
+		"es"	"{default}[{green}!{default}]"
+	}
+	"ClientFullyLoaded"
+	{
+		"en"	"{olive}%N {default}has fully loaded"
+		"pt"	"{olive}%N {default}carregou completamente"
+		"es"	"{olive}%N {default}ha cargado completamente"
+	}
+	"PauseCommand"
+	{
+		"en"	"{olive}%N {blue}Paused{default}."
+		"pt"	"{olive}%N {blue}Pausou{default}."
+		"es"	"{olive}%N {blue}Pausó{default}."
+	}
+	// PauseDelay_Timer
+	"PauseAction"
+	{
+		"en"	"{red}PAUSED"
+		"pt"	"{red}PAUSADO"
+		"es"	"{red}PAUSADO"
+	}
+	"PauseDelay"
+	{
+		"en"	"{blue}Pausing in{default}: {olive}%d"
+		"pt"	"{blue}Pausando em{default}: {olive}%d"
+		"es"	"{blue}Pausando en{default}: {olive}%d"
+	}
+	// ForcePause_Cmd
+	"Crashed"
+	{
+		"en"	"{olive}Game {default}was {green}force paused {default}because a player has {blue}crashed{default}."
+		"pt"	"{olive}O jogo {default}foi {green}pausado à força {default}porque um jogador {blue}crashou{default}."
+		"es"	"{olive}La partida {default}fue {green}pausada forzosamente {default}porque un jugador {blue}crasheó{default}."
+	}
+	"ForcePause"
+	{
+		"en"	"A {green}force pause {default}is issued by {blue}Admin {default}({olive}%N{default})"
+		"pt"	"Uma {green}pausa forçada {default}foi emitida pelo {blue}Admin {default}({olive}%N{default})"
+		"es"	"Una {green}pausa forzada {default}fue emitida por el {blue}Admin {default}({olive}%N{default})"
+	}
+	// Unpause_Cmd
+	"UnpauseSurvivors"
+	{
+		"en"	"{olive}%N %s{default}marked {blue}%s {default}ready."
+		"pt"	"{olive}%N %s{default}marcou {blue}%s {default}como pronto."
+		"es"	"{olive}%N %s{default}marcó a {blue}%s {default}como listo."
+	}
+	"UnpauseInfected"
+	{
+		"en"	"{olive}%N %s{default}marked {red}%s {default}ready."
+		"pt"	"{olive}%N %s{default}marcou {red}%s {default}como pronto."
+		"es"	"{olive}%N %s{default}marcó a {red}%s {default}como listo."
+	}
+	"UnpauseInitiator"
+	{
+		"en"	"{olive}%N {default}marked {green}Initiator {default}ready."
+		"pt"	"{olive}%N {default}marcou {green}Iniciador {default}como pronto."
+		"es"	"{olive}%N {default}marcó al {green}Iniciador {default}como listo."
+	}
+	"UnpauseAdminConfirm"
+	{
+		"en"	"{olive}Teams {default}are ready. Wait for {blue}Admin {default}to {green}confirm{default}."
+		"pt"	"{olive}Os times {default}estão prontos. Aguarde o {blue}Admin {default}{green}confirmar{default}."
+		"es"	"{olive}Los equipos {default}están listos. Espera a que el {blue}Admin {default}lo {green}confirme{default}."
+	}
+	// Unready_Cmd
+	"UnreadySurvivors"
+	{
+		"en"	"{olive}%N %s{default}marked {blue}%s {default}not ready."
+		"pt"	"{olive}%N %s{default}marcou {blue}%s {default}como não pronto."
+		"es"	"{olive}%N %s{default}marcó a {blue}%s {default}como no listo."
+	}
+	"UnreadyInfected"
+	{
+		"en"	"{olive}%N %s{default}marked {red}%s {default}not ready."
+		"pt"	"{olive}%N %s{default}marcou {red}%s {default}como não pronto."
+		"es"	"{olive}%N %s{default}marcó a {red}%s {default}como no listo."
+	}
+	"UnreadyInitiator"
+	{
+		"en"	"{olive}%N {default}marked {green}Initiator {default}not ready."
+		"pt"	"{olive}%N {default}marcou {green}Iniciador {default}como não pronto."
+		"es"	"{olive}%N {default}marcó al {green}Iniciador {default}como no listo."
+	}
+	// void AsInitiator()
+	"AsInitiator"
+	{
+		"en"		"{default}as {green}Initiator "
+		"pt"		"{default}como {green}Iniciador "
+		"es"		"{default}como {green}Iniciador "
+	}
+	// ForceUnpause_Cmd
+	"ForceUnpause"
+	{
+		"en"	"A {green}force unpause {default}is issued by {blue}Admin {default}({olive}%N{default})"
+		"pt"	"Uma {green}despausa forçada {default}foi emitida pelo {blue}Admin {default}({olive}%N{default})"
+		"es"	"Una {green}reanudación forzada {default}fue emitida por el {blue}Admin {default}({olive}%N{default})"
+	}
+	// AddPauseCount
+	"PauseLimit"
+	{
+		"en"	"You have reached your pause limit."
+		"pt"	"Você atingiu seu limite de pausas."
+		"es"	"Has alcanzado tu límite de pausas."
+	}
+	// AttemptPause
+	"PauseDeferred"
+	{
+		"en"	"{red}Pause has been delayed due to a pick-up in progress!"
+		"pt"	"{red}A pausa foi adiada porque há um jogador sendo levantado!"
+		"es"	"{red}¡La pausa se ha retrasado porque hay un jugador siendo levantado!"
+	}
+	// Pause
+	"PausePreventSpawn"
+	{
+		"en"	"{default}Your {red}Spawn {default}has been prevented because of the Pause"
+		"pt"	"{default}Seu {red}Spawn {default}foi impedido por causa da Pausa"
+		"es"	"{default}Tu {red}Spawn {default}ha sido impedido debido a la Pausa"
+	}
+	// Show_Cmd
+	"PanelShow"
+	{
+		"en"	"Panel is now {blue}on{default}."
+		"pt"	"O painel agora está {blue}ligado{default}."
+		"es"	"El panel ahora está {blue}activado{default}."
+	}
+	"PanelHide"
+	{
+		"en"	"Panel is now {red}off{default}."
+		"pt"	"O painel agora está {red}desligado{default}."
+		"es"	"El panel ahora está {red}desactivado{default}."
+	}
+	// UpdatePanel
+	"PanelSlots"
+	{
+		"en"	"▸ Server: %s\n▸ Slots: %d/%d"
+		"pt"	"▸ Servidor: %s\n▸ Vagas: %d/%d"
+		"es"	"▸ Servidor: %s\n▸ Plazas: %d/%d"
+	}
+	"PanelDate"
+	{
+		"en"	"▸ %m/%d/%Y - %I:%M%p"
+		"pt"	"▸ %d/%m/%Y - %H:%M"
+		"es"	"▸ %d/%m/%Y - %H:%M"
+	}
+	"PanelTitle"
+	{
+		"en"	"▸ Ready Status"
+		"pt"	"▸ Status de Pronto"
+		"es"	"▸ Estado de Listos"
+	}
+	"RequireAdmin"
+	{
+		"en"	"->0. Require Admin to Unpause"
+		"pt"	"->0. Requer Admin para Despausar"
+		"es"	"->0. Requiere Admin para Reanudar"
+	}
+	"SurvivorUnPaused"
+	{
+		"en"	"->1. Survivors: [√]"
+		"pt"	"->1. Sobreviventes: [√]"
+		"es"	"->1. Supervivientes: [√]"
+	}
+	"SurvivorPaused"
+	{
+		"en"	"->1. Survivors: [X]"
+		"pt"	"->1. Sobreviventes: [X]"
+		"es"	"->1. Supervivientes: [X]"
+	}
+	"InfectedUnPaused"
+	{
+		"en"	"->2. Infected: [√]"
+		"pt"	"->2. Infectados: [√]"
+		"es"	"->2. Infectados: [√]"
+	}
+	"InfectedPaused"
+	{
+		"en"	"->2. Infected: [X]"
+		"pt"	"->2. Infectados: [X]"
+		"es"	"->2. Infectados: [X]"
+	}
+	"InitiatorUnPaused"
+	{
+		"en"	"->0. Initiator: [√]"
+		"pt"	"->0. Iniciador: [√]"
+		"es"	"->0. Iniciador: [√]"
+	}
+	"InitiatorPaused"
+	{
+		"en"	"->0. Initiator: [X]"
+		"pt"	"->0. Iniciador: [X]"
+		"es"	"->0. Iniciador: [X]"
+	}
+	"AutoPauseCrash"
+	{
+		"en"	"▸ Forced AutoPause -> Crash"
+		"pt"	"▸ AutoPausa Forçada -> Crash"
+		"es"	"▸ AutoPausa Forzada -> Crash"
+	}
+	"ForcePauseAdmin"
+	{
+		"en"	"▸ Force Pause -> %s (Admin)"
+		"pt"	"▸ Pausa Forçada -> %s (Admin)"
+		"es"	"▸ Pausa Forzada -> %s (Admin)"
+	}
+	"InitiatorPause"
+	{
+		"en"	"▸ Initiator -> %s (%s)"
+		"pt"	"▸ Iniciador -> %s (%s)"
+		"es"	"▸ Iniciador -> %s (%s)"
+	}
+	"DurationPause"
+	{
+		"en"	"▸ Duration: %02d:%02d"
+		"pt"	"▸ Duração: %02d:%02d"
+		"es"	"▸ Duración: %02d:%02d"
+	}
+	// InitiateLiveCountdown
+	"CountdownCancelNotify"
+	{
+		"en"		"Say {olive}!unready {default}to cancel"
+		"pt"		"Digite {olive}!unready {default}para cancelar"
+		"es"		"Escribe {olive}!unready {default}para cancelar"
+	}
+	"GameisLive"
+	{
+		"en"		"Game is live!"
+		"pt"		"O jogo começou!"
+		"es"		"¡La partida ha comenzado!"
+	}
+	"CountdownReadyDelay"
+	{
+		"en"		"{blue}Live in{default}: {olive}%d{default}..."
+		"pt"		"{blue}Começando em{default}: {olive}%d{default}..."
+		"es"		"{blue}Comienza en{default}: {olive}%d{default}..."
+	}
+	// CancelFullReady
+	"CountdownCancelled"
+	{
+		"en"		"{olive}%N {default}cancelled the countdown!"
+		"pt"		"{olive}%N {default}cancelou a contagem regressiva!"
+		"es"		"{olive}%N {default}canceló la cuenta regresiva."
+	}
+	// Callvote_Callback
+	"CallvoteNoSpec"
+	{
+		"en"		"You're unable to call votes as a spectator."
+		"pt"		"Você não pode iniciar votações como espectador."
+		"es"		"No puedes iniciar votaciones como espectador."
+	}
+	"CallvoteNoExploit"
+	{
+		"en"		"You've just switched Teams, you are unable to vote for a few seconds."
+		"pt"		"Você acabou de trocar de time, não pode votar por alguns segundos."
+		"es"		"Acabas de cambiar de equipo, no puedes votar durante unos segundos."
+	}
+	"CallvoteCannotTargetAdmin"
+	{
+		"en"		"You may not kick Admins."
+		"pt"		"Você não pode expulsar Admins."
+		"es"		"No puedes expulsar a Admins."
+	}
+}
