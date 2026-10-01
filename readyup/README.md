@@ -2,9 +2,11 @@
 
 Holds the start of each round until players are ready. During ready-up, survivors stay in the saferoom, the director's timers are paused, god mode and infinite ammo are on, and a panel lists every player with their ready state. When everyone is ready, a countdown runs and the round goes live.
 
-Fork adapted for public servers: ready-up stays off in public games and only runs in campaigns started by a mix ([l4d2_mix](https://github.com/altair-sossai/l4d2-zone-server/blob/00718987ab04029f3c84fe851f6e77b83f95238c/addons/sourcemod/scripting/l4d2_mix.sp)). Requires [left4dhooks](https://forums.alliedmods.net/showthread.php?t=321696), [builtinvotes](https://github.com/L4D-Community/builtinvotes) and `colors`.
+Fork adapted for public servers: ready-up stays off in public games and only runs in campaigns started by a mix (`l4d2_mix`). Requires [left4dhooks](https://forums.alliedmods.net/showthread.php?t=321696), [builtinvotes](https://github.com/L4D-Community/builtinvotes) and `colors`.
 
 Original: https://github.com/Target5150/MoYu_Server_Stupid_Plugins
+
+Mix plugin used (`l4d2_mix`, from l4d2-zone-server): https://github.com/altair-sossai/l4d2-zone-server/blob/master/addons/sourcemod/scripting/l4d2_mix.sp
 
 Rules
 ------
