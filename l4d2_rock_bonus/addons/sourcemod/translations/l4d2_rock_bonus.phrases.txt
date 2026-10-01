@@ -26,33 +26,33 @@
 	"Event_Skeet"
 	{
 		"#format"	"{1:s},{2:s}"
-		"en"		"{green}Rock Bonus{default}: {olive}{1}{default} {2}"
-		"pt"		"{green}Bônus de Pedra{default}: {olive}{1}{default} {2}"
-		"es"		"{green}Bono de Roca{default}: {olive}{1}{default} {2}"
+		"en"		"{green}Bonus{default}: {olive}{1}{default} {2}"
+		"pt"		"{green}Bônus{default}: {olive}{1}{default} {2}"
+		"es"		"{green}Bono{default}: {olive}{1}{default} {2}"
 	}
 
 	"Event_HitSurvivor"
 	{
 		"#format"	"{1:s},{2:s}"
-		"en"		"{green}Rock Bonus{default}: {olive}{1}{default} {2} (HIT)"
-		"pt"		"{green}Bônus de Pedra{default}: {olive}{1}{default} {2} (HIT)"
-		"es"		"{green}Bono de Roca{default}: {olive}{1}{default} {2} (HIT)"
+		"en"		"{green}Bonus{default}: {olive}{1}{default} {2}"
+		"pt"		"{green}Bônus{default}: {olive}{1}{default} {2}"
+		"es"		"{green}Bono{default}: {olive}{1}{default} {2}"
 	}
 
 	"Summary"
 	{
 		"#format"	"{1:d},{2:s},{3:s},{4:s}"
-		"en"		"{green}Round {1} Rock Bonus{default}: {2} [{3} / {4}]"
-		"pt"		"{green}Rodada {1} Bônus de Pedra{default}: {2} [{3} / {4}]"
-		"es"		"{green}Ronda {1} Bono de Roca{default}: {2} [{3} / {4}]"
+		"en"		"{green}Round {1} Bonus{default}: {2} [{3} / {4}]"
+		"pt"		"{green}Rodada {1} Bônus{default}: {2} [{3} / {4}]"
+		"es"		"{green}Ronda {1} Bono{default}: {2} [{3} / {4}]"
 	}
 
 	"Summary_Lost"
 	{
 		"#format"	"{1:d},{2:s}"
-		"en"		"{green}Round {1} Rock Bonus{default}: {2} [{red}wiped out{default}]"
-		"pt"		"{green}Rodada {1} Bônus de Pedra{default}: {2} [{red}time eliminado{default}]"
-		"es"		"{green}Ronda {1} Bono de Roca{default}: {2} [{red}equipo eliminado{default}]"
+		"en"		"{green}Round {1} Bonus{default}: {2} [{red}wiped out{default}]"
+		"pt"		"{green}Rodada {1} Bônus{default}: {2} [{red}time eliminado{default}]"
+		"es"		"{green}Ronda {1} Bono{default}: {2} [{red}equipo eliminado{default}]"
 	}
 
 	"Broken_One"

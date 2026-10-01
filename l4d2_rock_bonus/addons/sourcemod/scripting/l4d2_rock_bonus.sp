@@ -55,6 +55,7 @@ bool g_bRoundLive;
 bool g_bBonusInjected;  // Bonus already injected through vs_defib_penalty this round
 bool g_bBonusSent;      // Bonus already handed to l4d2_penalty_bonus this round
 bool g_bSummaryShown;
+int  g_iEndingRound;     // Half that is ending (0 or 1), read before the game's end of round logic runs
 bool g_bMadeItKnown;     // L4D2_OnEndVersusModeRound already told us if the survivors made it
 bool g_bSurvivorsMadeIt;
 bool g_bBonusLost;       // Bonus not given because the survivors didn't make it (l4d2_rock_bonus_require_safe)
@@ -401,6 +402,8 @@ public Action L4D2_OnEndVersusModeRound(bool countSurvivors)
 {
 	CloseRound();
 
+	g_iEndingRound = GameRules_GetProp("m_bInSecondHalfOfRound") ? 1 : 0;
+
 	// countSurvivors: true when the survivors made it to the saferoom
 	g_bMadeItKnown     = true;
 	g_bSurvivorsMadeIt = countSurvivors;
@@ -436,9 +439,8 @@ public void L4D2_OnEndVersusModeRound_Post()
 		return;
 
 	g_bSummaryShown = true;
-	int round = GameRules_GetProp("m_bInSecondHalfOfRound") ? 1 : 0;
-	SaveRoundResult(round);
-	AnnounceSummary(round);
+	SaveRoundResult(g_iEndingRound);
+	AnnounceSummary(g_iEndingRound);
 }
 
 // Bonus the team actually gets, taking l4d2_rock_bonus_require_safe into account
