@@ -233,10 +233,14 @@ void Event_PlayerDisconnect(Event hEvent, char[] sEventName, bool dontBroadcast)
     if (client <= 0 || client > MaxClients)
         return;
 
+    // Clients that disconnect while still connecting/loading
+    if (!IsClientInGame(client))
+        return;
+
     char sAuthId[64];
     GetClientAuthId(client, AuthId_Steam2, sAuthId, sizeof(sAuthId));
 
-    if (strcmp(sAuthId, "BOT") == 0) 
+    if (strcmp(sAuthId, "BOT") == 0)
         return;
 
     if (!teamPlayers.ContainsKey(sAuthId)) 
