@@ -594,7 +594,9 @@ void PrintRoundResult(int client, int round)
 {
 	// "150/400", or just "150" without a max
 	char value[64];
-	if (g_iResultMax[round] > 0)
+	if (g_iResultMax[round] > 0 && g_bResultLost[round])
+		FormatEx(value, sizeof(value), "{green}%d{default}/{olive}%d{default}", g_iResultBonus[round], g_iResultMax[round]);
+	else if (g_iResultMax[round] > 0)
 		FormatEx(value, sizeof(value), "{green}%d{default}/{lightgreen}%d{default}", g_iResultBonus[round], g_iResultMax[round]);
 	else
 		FormatEx(value, sizeof(value), "{green}%d{default}", g_iResultBonus[round]);
