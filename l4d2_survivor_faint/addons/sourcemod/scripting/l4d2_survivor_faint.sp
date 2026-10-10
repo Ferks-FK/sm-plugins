@@ -24,7 +24,7 @@
 
 Handle g_hApplyAbsVelocityImpulse = null;
 
-#define PLUGIN_VERSION  "1.3.0"
+#define PLUGIN_VERSION  "1.4.0"
 
 // Input flags (L4D2)
 #define IN_ATTACK       (1 << 0)
@@ -453,6 +453,11 @@ void MainRagdollFunc(int client)
             ReplyToCommand(client, "[Faint] You must be on the ground to faint.");
             return;
         }
+        if (!DropCarryable(client))
+        {
+            ReplyToCommand(client, "[Faint] Cant faint while holding this item.");
+            return;
+        }
         CreateFaintRagdoll(client);
     }
 }
@@ -598,6 +603,13 @@ void RemoveFaintRagdoll(int client)
     g_fLastRagPos[client][2] = 0.0;
     g_fRagGroundZ[client]    = 0.0;
 
+    // Always unhook, even if the ragdoll was already removed, otherwise the
+    // player keeps having the active weapon cleared every frame.
+    SDKUnhook(client, SDKHook_PostThink,     Hook_ClientThink);
+    SDKUnhook(client, SDKHook_WeaponCanUse,  WeaponCanUseSwitch);
+    SDKUnhook(client, SDKHook_WeaponSwitch,  WeaponCanUseSwitch);
+    SDKUnhook(client, SDKHook_PostThinkPost, Hook_HideAddons);
+
     int rag = EntRefToEntIndex(ragRef);
 
     if (rag == INVALID_ENT_REFERENCE || !IsValidEntity(rag))
@@ -607,10 +619,6 @@ void RemoveFaintRagdoll(int client)
         return;
     }
 
-    SDKUnhook(client, SDKHook_PostThink,     Hook_ClientThink);
-    SDKUnhook(client, SDKHook_WeaponCanUse,  WeaponCanUseSwitch);
-    SDKUnhook(client, SDKHook_WeaponSwitch,  WeaponCanUseSwitch);
-    SDKUnhook(client, SDKHook_PostThinkPost, Hook_HideAddons);
     RestoreClient(client, rag, savedGroundZ);
 
     CreateTimer(0.05, Timer_KillRagdoll, ragRef);
@@ -678,8 +686,9 @@ void RestoreClient(int client, int rag, float savedGroundZ = 0.0)
 
     if (g_iWeaponHandEnt[client] != INVALID_ENT_REFERENCE)
     {
+        // Only restore a weapon the player still owns, otherwise the game picks the next one.
         int iEnt = EntRefToEntIndex(g_iWeaponHandEnt[client]);
-        if (iEnt != INVALID_ENT_REFERENCE && IsValidEntity(iEnt))
+        if (iEnt != INVALID_ENT_REFERENCE && IsValidEntity(iEnt) && GetEntPropEnt(iEnt, Prop_Send, "m_hOwner") == client)
             SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", iEnt);
         g_iWeaponHandEnt[client] = INVALID_ENT_REFERENCE;
     }
@@ -694,11 +703,14 @@ void RestoreClient(int client, int rag, float savedGroundZ = 0.0)
 // -----------------------------------------------------------------------
 Action Hook_ClientThink(int client)
 {
-    int rag = GetRagdoll(client);
+    // GetRagdoll() would clear g_iRagdoll and skip RemoveFaintRagdoll()'s restore.
+    int rag = EntRefToEntIndex(g_iRagdoll[client]);
     if (rag == INVALID_ENT_REFERENCE)
     {
         RemoveFaintRagdoll(client);
-        SDKUnhook(client, SDKHook_PostThink,    Hook_ClientThink);
+        SDKUnhook(client, SDKHook_PostThink,     Hook_ClientThink);
+        SDKUnhook(client, SDKHook_WeaponCanUse,  WeaponCanUseSwitch);
+        SDKUnhook(client, SDKHook_WeaponSwitch,  WeaponCanUseSwitch);
         SDKUnhook(client, SDKHook_PostThinkPost, Hook_HideAddons);
         return Plugin_Continue;
     }
@@ -1015,6 +1027,28 @@ void Hook_HideAddons(int client)
             g_iWeaponHandEnt[client] = EntIndexToEntRef(iEnt);
         SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", -1);
     }
+}
+
+// Carryables (propane, gascan, gnome...) can't be held while fainted.
+bool DropCarryable(int client)
+{
+    int iCarry = GetPlayerWeaponSlot(client, 5);
+    if (iCarry == -1 || GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon") != iCarry)
+        return true;
+
+    char sClass[64];
+    for (int slot = 0; slot <= 4; slot++)
+    {
+        int iWeapon = GetPlayerWeaponSlot(client, slot);
+        if (iWeapon == -1)
+            continue;
+
+        GetEntityClassname(iWeapon, sClass, sizeof(sClass));
+        FakeClientCommand(client, "use %s", sClass);
+        break;
+    }
+
+    return GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon") != iCarry;
 }
 
 bool Filter_IgnoreClient(int entity, int contentsMask, any data)
