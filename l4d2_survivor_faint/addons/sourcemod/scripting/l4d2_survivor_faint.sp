@@ -24,7 +24,7 @@
 
 Handle g_hApplyAbsVelocityImpulse = null;
 
-#define PLUGIN_VERSION  "1.4.0"
+#define PLUGIN_VERSION  "1.4.1"
 
 // Input flags (L4D2)
 #define IN_ATTACK       (1 << 0)
@@ -687,8 +687,9 @@ void RestoreClient(int client, int rag, float savedGroundZ = 0.0)
     if (g_iWeaponHandEnt[client] != INVALID_ENT_REFERENCE)
     {
         // Only restore a weapon the player still owns, otherwise the game picks the next one.
+        // When incapacitated the game already switched to the pistol, keep it.
         int iEnt = EntRefToEntIndex(g_iWeaponHandEnt[client]);
-        if (iEnt != INVALID_ENT_REFERENCE && IsValidEntity(iEnt) && GetEntPropEnt(iEnt, Prop_Send, "m_hOwner") == client)
+        if (!IsIncapacitated(client) && iEnt != INVALID_ENT_REFERENCE && IsValidEntity(iEnt) && GetEntPropEnt(iEnt, Prop_Send, "m_hOwner") == client)
             SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", iEnt);
         g_iWeaponHandEnt[client] = INVALID_ENT_REFERENCE;
     }
@@ -1012,6 +1013,9 @@ Action Hook_ClientThink(int client)
 
 Action WeaponCanUseSwitch(int client, int weapon)
 {
+    // Let the game give/switch to the incap pistol, the faint ends on player_incapacitated.
+    if (IsIncapacitated(client))
+        return Plugin_Continue;
     return Plugin_Stop;
 }
 

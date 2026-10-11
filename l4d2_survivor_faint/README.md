@@ -15,6 +15,10 @@ Commands
 Changelog
 ------
 
+### V1.4.1 (10-Oct-2026)
+
+- Fixed an issue where being incapacitated while in a faint state would prevent the player from receiving their secondary weapon.
+
 ### V1.4.0 (10-Oct-2026)
 
 - Fixed players ending up with no usable weapon after make faint while holding a carryable (propane tank, gas can, gnome...). The item is now dropped before the faint and can still be picked up or explode.
