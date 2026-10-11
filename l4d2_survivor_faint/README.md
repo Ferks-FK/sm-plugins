@@ -15,7 +15,7 @@ Commands
 Changelog
 ------
 
-### V1.4.1 (10-Oct-2026)
+### V1.4.1 (11-Oct-2026)
 
 - Fixed an issue where being incapacitated while in a faint state would prevent the player from receiving their secondary weapon.
 
