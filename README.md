@@ -18,6 +18,7 @@ SourceMod plugins for L4D(2) servers, mostly focused on Versus.
 | [l4d_tank_pass](l4d_tank_pass) | L4D / L4D2 | Allows the Tank to pass control to another player |
 | [pause](pause) | L4D2 | Pause commands and auto-pause on crash, only in matches started by a mix |
 | [readyup](readyup) | L4D2 | Ready-up before each round, only in campaigns started by a mix |
+| [tank_throws_cars](tank_throws_cars) | L4D2 | The Tank picks up the car or hittable he is aiming at and throws it instead of a rock |
 
 ## Installation
 
