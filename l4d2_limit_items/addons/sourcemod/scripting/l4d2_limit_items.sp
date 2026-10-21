@@ -8,7 +8,7 @@
 #include <l4d2_saferoom_detect>
 #define REQUIRE_PLUGIN
 
-#define PLUGIN_VERSION      "2.2"
+#define PLUGIN_VERSION      "2.3"
 
 // Models for removable prop_physics entities
 #define MODEL_GASCAN    "models/props_junk/gascan001a.mdl"
@@ -18,6 +18,8 @@
 
 // Credits:
 // - Jahze, Sir, A1m` (L4D2 Remove Cans)  - prop_physics removal logic (adapted to support limits) [https://github.com/SirPlease/L4D2-Competitive-Rework/blob/master/addons/sourcemod/scripting/l4d_no_cans.sp]
+// - Forgetest (L4D2 Uncommon Adjustment)  - control of fallen survivor items [https://github.com/SirPlease/L4D2-Competitive-Rework/blob/master/addons/sourcemod/scripting/l4d2_uncommon_adjustment.sp]
+// - Tabun, A1m` (Uncommon Infected Blocker) - fallen survivor and parachutist detection [https://github.com/SirPlease/L4D2-Competitive-Rework/blob/master/addons/sourcemod/scripting/l4d2_uncommon_blocker.sp]
 
 public Plugin myinfo =
 {
@@ -61,17 +63,35 @@ bool   g_bSafeDetectAvailable;
 bool   g_bMenuShownThisRound;
 bool   g_bItemsReady;
 bool   g_bMenuEnabled;
+bool g_bWarnedSafeDetect;
 
 int    g_iMenuShow; // bitmask — see g_sItemLabels for bit mapping (4095 = all)
 
-// Special handling for fallen survivor drops
-int g_iCountBeforeDeath[4]; // molotov, pipe_bomb, pain_pills, first_aid_kit
+// Fallen survivors (including the parachutist common) and CEDAs carry items they drop on death.
+#define GENDER_FALLEN       14
+#define GENDER_CEDA         11
+#define CEDA_FLAG_VOMITJAR  1
 
+// Same order as the item bits in m_nFallenFlags
 static const char g_sFallenInstances[4][] = {
     "weapon_molotov",
     "weapon_pipe_bomb",
     "weapon_pain_pills",
     "weapon_first_aid_kit"
+};
+
+static const char g_sFallenSpawns[4][] = {
+    "weapon_molotov_spawn",
+    "weapon_pipe_bomb_spawn",
+    "weapon_pain_pills_spawn",
+    "weapon_first_aid_kit_spawn"
+};
+
+static const char g_sFallenLabels[4][] = {
+    "Molotov",
+    "Pipe Bomb",
+    "Pain Pills",
+    "Medkit"
 };
 
 // item labels and their cvars, shown in the panel in this order
@@ -209,6 +229,7 @@ public void OnMapEnd()
     g_bLimitedThisRound = false;
     g_bItemsReady         = false;
     g_bMenuShownThisRound = false;
+    g_bWarnedSafeDetect   = false;
 }
 
 void ClearTimers()
@@ -225,6 +246,8 @@ public void OnEntityCreated(int entity, const char[] classname)
 
     if (StrEqual(classname, "infected"))
         SDKHook(entity, SDKHook_SpawnPost, OnSpawnInfectedPost);
+    else if (g_bDebug && StrEqual(classname, "weapon_vomitjar"))
+        RequestFrame(Frame_LogVomitjarCreated, EntIndexToEntRef(entity));
 }
 
 void OnSpawnInfectedPost(int entity)
@@ -236,6 +259,57 @@ void OnSpawnInfectedPost(int entity)
 
         SDKHook(entity, SDKHook_OnTakeDamageAlivePost, OnFallenSurvivorDamaged);
     }
+    else if (GetEntProp(entity, Prop_Send, "m_Gender") == GENDER_CEDA)
+    {
+        bool hasVomitjar = (GetEntProp(entity, Prop_Send, "m_nFallenFlags") & CEDA_FLAG_VOMITJAR) != 0;
+
+        if ( g_bDebug )
+            LogMessage("[CEDA] Spawned entity %d, carrying bile jar: %s", entity, hasVomitjar ? "yes" : "no");
+
+        if ( hasVomitjar )
+            SDKHook(entity, SDKHook_OnTakeDamageAlivePost, OnCedaDamaged);
+    }
+}
+
+// -------------------------------------------------------
+// CEDA bile jar drop
+// -------------------------------------------------------
+
+void OnCedaDamaged(int entity)
+{
+    if( GetEntProp(entity, Prop_Data, "m_iHealth") > 0 )
+        return;
+
+    SDKUnhook(entity, SDKHook_OnTakeDamageAlivePost, OnCedaDamaged);
+
+    if( !g_bEnabled )
+        return;
+
+    // Taking the bile jar away before the drop keeps it from spawning.
+    int flags = GetEntProp(entity, Prop_Send, "m_nFallenFlags");
+
+    if( (flags & CEDA_FLAG_VOMITJAR)
+        && IsDropAtLimit("weapon_vomitjar_spawn", "weapon_vomitjar", g_cvMaxBileJar.IntValue, "CEDA", "Bile Jar") )
+    {
+        SetEntProp(entity, Prop_Send, "m_nFallenFlags", flags & ~CEDA_FLAG_VOMITJAR);
+    }
+
+    if ( g_bDebug )
+        LogMessage("[CEDA] Entity %d m_nFallenFlags: %d -> %d", entity, flags, GetEntProp(entity, Prop_Send, "m_nFallenFlags"));
+}
+
+// Debug only.
+void Frame_LogVomitjarCreated(int ref)
+{
+    int ent = EntRefToEntIndex(ref);
+    if( ent == INVALID_ENT_REFERENCE )
+        return;
+
+    float pos[3];
+    GetEntPropVector(ent, Prop_Data, "m_vecAbsOrigin", pos);
+
+    LogMessage("[CEDA] weapon_vomitjar created: entity %d at %.0f %.0f %.0f, owner %d, time %.2f",
+        ent, pos[0], pos[1], pos[2], GetEntPropEnt(ent, Prop_Data, "m_hOwnerEntity"), GetGameTime());
 }
 
 void OnFallenSurvivorDamaged(int entity)
@@ -247,41 +321,37 @@ void OnFallenSurvivorDamaged(int entity)
         LogMessage("[FallenSurvivor] Fallen survivor killed, unhooking...");
 
     SDKUnhook(entity, SDKHook_OnTakeDamageAlivePost, OnFallenSurvivorDamaged);
-    
+
+    if( !g_bEnabled )
+        return;
+
+    // Taking items over the limit away before the drop keeps them from spawning.
+    int flags    = GetEntProp(entity, Prop_Send, "m_nFallenFlags");
+    int newFlags = flags;
+
     for( int i = 0; i < sizeof(g_sFallenInstances); i++ )
     {
-        int count = 0;
-        int ent   = -1;
-        while( (ent = FindEntityByClassname(ent, g_sFallenInstances[i])) != -1 )
-            count++;
-        g_iCountBeforeDeath[i] = count;
+        if( (newFlags & (1 << i)) && IsFallenItemAtLimit(i) )
+            newFlags &= ~(1 << i);
     }
 
-    // Check and remove items on the next frame.
-    RequestFrame(Frame_LimitAfterFallenDeath);
+    if( newFlags != flags )
+        SetEntProp(entity, Prop_Send, "m_nFallenFlags", newFlags);
+
+    if ( g_bDebug )
+        LogMessage("[FallenSurvivor] Entity %d m_nFallenFlags: %d -> %d", entity, flags, newFlags);
 }
 
-void Frame_LimitAfterFallenDeath()
+int GetFallenItemLimit(int index)
 {
-    int counts[4];
-
-    for( int i = 0; i < sizeof(g_sFallenInstances); i++ )
+    switch( index )
     {
-        int count = 0;
-        int ent   = -1;
-        while( (ent = FindEntityByClassname(ent, g_sFallenInstances[i])) != -1 )
-            count++;
-        counts[i] = count;
+        case 0: return g_cvMaxMolotov.IntValue;
+        case 1: return g_cvMaxPipeBomb.IntValue;
+        case 2: return g_cvMaxPills.IntValue;
+        case 3: return g_cvMaxMedkitOutside.IntValue;
     }
-
-    if( counts[0] > g_iCountBeforeDeath[0] )
-        LimitFallenDrop("weapon_molotov_spawn",       "weapon_molotov",       g_cvMaxMolotov.IntValue,       "Molotov");
-    if( counts[1] > g_iCountBeforeDeath[1] )
-        LimitFallenDrop("weapon_pipe_bomb_spawn",     "weapon_pipe_bomb",     g_cvMaxPipeBomb.IntValue,      "Pipe Bomb");
-    if( counts[2] > g_iCountBeforeDeath[2] )
-        LimitFallenDrop("weapon_pain_pills_spawn",    "weapon_pain_pills",    g_cvMaxPills.IntValue,         "Pain Pills");
-    if( counts[3] > g_iCountBeforeDeath[3] )
-        LimitFallenDrop("weapon_first_aid_kit_spawn", "weapon_first_aid_kit", g_cvMaxMedkitOutside.IntValue, "Medkit");
+    return -1;
 }
 
 public void Event_RoundStart(Event hEvent, const char[] name, bool dontBroadcast)
@@ -537,10 +607,24 @@ void LimitLaserSights(int maxAllowed)
     delete hList;
 }
 
-void LimitFallenDrop(const char[] spawnClass, const char[] instanceClass, int maxAllowed, const char[] label)
+bool IsFallenItemAtLimit(int index)
+{
+    return IsDropAtLimit(g_sFallenSpawns[index], g_sFallenInstances[index], GetFallenItemLimit(index),
+        "FallenSurvivor", g_sFallenLabels[index]);
+}
+
+// Returns true if dropping one more of this item would exceed its limit.
+// Counts map spawns and items held or on the floor, outside the start saferoom.
+bool IsDropAtLimit(const char[] spawnClass, const char[] instanceClass, int maxAllowed, const char[] tag, const char[] label)
 {
     if( maxAllowed < 0 )
-        return;
+        return false;
+
+    if( !g_bSafeDetectAvailable && !g_bWarnedSafeDetect )
+    {
+        g_bWarnedSafeDetect = true;
+        LogError("[L4D2 Limit Items] l4d2_saferoom_detect is not loaded. Infected drop limits will also count items inside the start saferoom.");
+    }
 
     int total = 0;
     int ent   = -1;
@@ -551,7 +635,6 @@ void LimitFallenDrop(const char[] spawnClass, const char[] instanceClass, int ma
             total++;
     }
 
-    ArrayList hFloor = new ArrayList();
     ent = -1;
     while( (ent = FindEntityByClassname(ent, instanceClass)) != -1 )
     {
@@ -561,35 +644,19 @@ void LimitFallenDrop(const char[] spawnClass, const char[] instanceClass, int ma
             if( !IsInStartSaferoom(owner) )
                 total++;
         }
-        else
+        else if( !IsInStartSaferoom(ent) )
         {
-            if( !IsInStartSaferoom(ent) )
-            {
-                hFloor.Push(ent);
-                total++;
-            }
+            total++;
         }
     }
 
-    if( total > maxAllowed )
-    {
-        int toRemove = total - maxAllowed;
-        for( int i = hFloor.Length - 1; i >= 0 && toRemove > 0; i-- )
-        {
-            int e = hFloor.Get(i);
-            if( IsValidEntity(e) )
-            {
-                RemoveEntity(e);
-                toRemove--;
-            }
-        }
+    bool atLimit = total >= maxAllowed;
 
-        if( g_bDebug )
-            LogMessage("[L4D2 Limit Items] [FallenSurvivor] %s: total %d, limit %d, removed %d",
-                label, total, maxAllowed, total - maxAllowed);
-    }
+    if( g_bDebug )
+        LogMessage("[L4D2 Limit Items] [%s] %s: total %d, limit %d, drop %s",
+            tag, label, total, maxAllowed, atLimit ? "blocked" : "allowed");
 
-    delete hFloor;
+    return atLimit;
 }
 
 void LimitMedkitsInStartSaferoom(int maxInside, int maxOutside)
@@ -931,13 +998,12 @@ bool IsInStartSaferoom(int ent)
     return SAFEDETECT_IsEntityInStartSaferoom(ent);
 }
 
+// Also matches the parachutist common, whose model name has no "fallen".
 stock bool isFallenSurvivor(int entity)
 {
 	if (entity <= 0 || entity > 2048 || !IsValidEntity(entity)) return false;
-	char model[128];
-    
-	GetEntPropString(entity, Prop_Data, "m_ModelName", model, sizeof(model));
-	return StrContains(model, "fallen") != -1;
+
+	return GetEntProp(entity, Prop_Send, "m_Gender") == GENDER_FALLEN;
 }
 
 // Returns the number of live spawn entities of a given classname.
