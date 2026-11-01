@@ -25,6 +25,7 @@ public Plugin myinfo =
 #define BOT_BOOMER_AVOID_RADIUS_SQR		40000.0
 #define BOT_GRENADE_CHECK_RADIUS_SQR	90000.0
 #define BOT_CMD_MOVE_INTERVAL 		0.8
+#define BOT_TANK_FLEE_AIM_TIME		2.0
 
 #define HUMAN_HEIGHT				71.0
 #define HUMAN_HALF_HEIGHT			35.5
@@ -2074,6 +2075,8 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 		float fHeightDist = (fTankDist + (g_fClientAbsOrigin[iClient][2] - g_fClientAbsOrigin[iTankTarget][2]));
 		if (fHeightDist <= 1638400.0 && (g_bCvar_AvoidTanksWithProp && IsEntityExists(iTankProp) || g_bCvar_TakeCoverFromRocks && g_bInfectedBot_IsThrowing[iTankTarget]) && (iVictim == iClient || GetClientDistance(iClient, iVictim, true) <= 65536.0) && IsVisibleEntity(iClient, iTankTarget, MASK_SHOT_HULL))
 		{
+			g_fSurvivorBot_TankFleeUntil[iClient] = GetGameTime() + BOT_TANK_FLEE_AIM_TIME;
+
 			if (strcmp(g_sSurvivorBot_MovePos_Name[iClient], "TakeCover") != 0)
 			{
 				TakeCoverFromEntity(iClient, (IsEntityExists(iTankProp) ? iTankProp : iTankTarget), 768.0);
@@ -2090,7 +2093,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 			{
 				L4D2_CommandABot(iClient, iTankTarget, BOT_CMD_RETREAT);
 				if (g_bCvar_Debug && GetGameTime() >= g_fSurvivorBot_TankFleeUntil[iClient])LogMessage("[SB-AI DEBUG] client=%d(%N) TANK-FLEE-START tank=%d dist=%.1f visible=%d", iClient, iClient, iTankTarget, SquareRoot(fTankDist), bTankVisible);
-				g_fSurvivorBot_TankFleeUntil[iClient] = GetGameTime() + 2.0;
+				g_fSurvivorBot_TankFleeUntil[iClient] = GetGameTime() + BOT_TANK_FLEE_AIM_TIME;
 			}
 		}
 
@@ -2321,7 +2324,8 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 		}
 
 		// A closer common would win the choice above, and one behind the bot fails the view cone check, so it would run from the tank without firing at all.
-		bool bFleeingTank = (IsValidClient(iTankTarget) && GetGameTime() < g_fSurvivorBot_TankFleeUntil[iClient] && IsVisibleEntity(iClient, iTankTarget, MASK_SHOT_HULL));
+		// Only with a gun or melee weapon in hand: holding a grenade, this aim would replace the arc of the throw.
+		bool bFleeingTank = ((iCurWeapon == iWpnSlots[0] || iCurWeapon == iWpnSlots[1]) && !L4D_IsPlayerIncapacitated(iClient) && IsValidClient(iTankTarget) && (GetGameTime() < g_fSurvivorBot_TankFleeUntil[iClient] || GetClientDistance(iClient, iTankTarget, true) <= 589824.0) && IsVisibleEntity(iClient, iTankTarget, MASK_SHOT_HULL));
 		if (bFleeingTank)iFireTarget = iTankTarget;
 
 		if (IsEntityExists(iFireTarget) && (bFleeingTank || HasVisualContactWithEntity(iClient, iFireTarget, (iFireTarget != iTankTarget))))
@@ -2337,7 +2341,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 				// Outside the firing branches below, so the bot also faces the tank while reloading or out of range.
 				SnapViewToPosition(iClient, fFirePos);
 
-				if (iCurWeapon == iWpnSlots[1] && SurvivorHasMeleeWeapon(iClient) && iWpnSlots[0] != -1 && (g_iWeapon_AmmoLeft[iWpnSlots[0]] > 0 || g_iWeapon_Clip1[iWpnSlots[0]] > 0) && GetGameTime() > g_fSurvivorBot_NextWeaponRangeSwitchTime[iClient])
+				if (iCurWeapon == iWpnSlots[1] && SurvivorHasMeleeWeapon(iClient) && GetSurvivorBotWeaponPreference(iClient) != L4D_WEAPON_PREFERENCE_SECONDARY && iWpnSlots[0] != -1 && (g_iWeapon_AmmoLeft[iWpnSlots[0]] > 0 || g_iWeapon_Clip1[iWpnSlots[0]] > 0) && GetGameTime() > g_fSurvivorBot_NextWeaponRangeSwitchTime[iClient])
 				{
 					g_fSurvivorBot_NextWeaponRangeSwitchTime[iClient] = GetGameTime() + GetRandomFloat(1.0, 3.0);
 					g_bSurvivorBot_ForceSwitchWeapon[iClient] = true;
@@ -6374,6 +6378,7 @@ Action OnRegroupWithTeamAction(BehaviorAction hAction, int iActor, float fInterv
 	{
 		hResult.type = CHANGE_TO;
 		hResult.action = CreateSurvivorLegsRetreatAction(iPathDangerous);
+		g_fSurvivorBot_TankFleeUntil[iActor] = GetGameTime() + BOT_TANK_FLEE_AIM_TIME;
 		return Plugin_Handled;
 	}
 
@@ -6394,6 +6399,7 @@ Action OnMoveToIncapacitatedFriendAction(BehaviorAction hAction, int iActor, flo
 	{
 		hResult.type = CHANGE_TO;
 		hResult.action = CreateSurvivorLegsRetreatAction(iPathDangerous);
+		g_fSurvivorBot_TankFleeUntil[iActor] = GetGameTime() + BOT_TANK_FLEE_AIM_TIME;
 		return Plugin_Handled;
 	}
 
