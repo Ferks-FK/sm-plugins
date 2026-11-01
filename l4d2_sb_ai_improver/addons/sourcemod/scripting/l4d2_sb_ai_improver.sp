@@ -25,6 +25,8 @@ public Plugin myinfo =
 #define BOT_BOOMER_AVOID_RADIUS_SQR		40000.0
 #define BOT_GRENADE_CHECK_RADIUS_SQR	90000.0
 #define BOT_TANK_KEEP_AWAY_DIST_SQR		147456.0
+#define BOT_TANK_CHASE_DIST_SQR			2250000.0
+#define BOT_TANK_SUPPORT_CLOSE_DIST_SQR	40000.0
 #define BOT_CMD_MOVE_INTERVAL 		0.8
 
 #define HUMAN_HEIGHT				71.0
@@ -280,6 +282,8 @@ static ConVar g_hCvar_DeployUpgradePacks;
 static ConVar g_hCvar_DontSwitchToPistol;
 static ConVar g_hCvar_TakeCoverFromRocks;
 static ConVar g_hCvar_TankTeamLeash;
+static ConVar g_hCvar_TankSupport_Range;
+static ConVar g_hCvar_TankSupport_MinDist;
 static ConVar g_hCvar_AvoidTanksWithProp;
 static ConVar g_hCvar_NoFallDmgOnLadderFail;
 
@@ -291,6 +295,8 @@ static bool g_bCvar_DeployUpgradePacks;
 static bool g_bCvar_DontSwitchToPistol;
 static bool g_bCvar_TakeCoverFromRocks;
 static float g_fCvar_TankTeamLeash;
+static float g_fCvar_TankSupport_RangeSqr;
+static float g_fCvar_TankSupport_MinDist;
 static bool g_bCvar_AvoidTanksWithProp;
 static bool g_bCvar_NoFallDmgOnLadderFail;
 
@@ -388,6 +394,10 @@ static float g_fHasAliveSurvivorBots_NextCheck;
 // Valid until the next SetMoveToPosition, since the goal position cannot change before that.
 static float g_fSurvivorBot_NextTankCoverSearchTime[MAXPLAYERS+1];
 static float g_fSurvivorBot_NextTeamRegroupTime[MAXPLAYERS+1];
+static float g_fSurvivorBot_NextTankSupportTime[MAXPLAYERS+1];
+static int g_iSurvivorBot_SupportVictim[MAXPLAYERS+1];
+static float g_fSurvivorBot_SupportVictimUntil[MAXPLAYERS+1];
+static bool g_bSurvivorBot_SupportingVictim[MAXPLAYERS+1];
 static int g_iTeamAnchor;
 static int g_iTeamAnchor_Tick = -1;
 
@@ -782,6 +792,8 @@ void CreateAndHookConVars()
 	g_hCvar_DontSwitchToPistol						= CreateConVar("l4d2_improvedbots_dontswitchtopistol", "1", "If bots shouldn't switch to their pistol while they have sniper rifle equiped.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_hCvar_TakeCoverFromRocks						= CreateConVar("l4d2_improvedbots_takecoverfromtankrocks", "1", "If bots should take cover from tank's thrown rocks.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_hCvar_TankTeamLeash							= CreateConVar("l4d2_improvedbots_tank_team_leash", "600", "How far from the team a bot may be while a tank is alive. Farther than this, it regroups instead of fleeing. <0: Disable>", FCVAR_NOTIFY, true, 0.0);
+	g_hCvar_TankSupport_Range						= CreateConVar("l4d2_improvedbots_tank_support_range", "600", "How close a bot tries to stay to the survivor a tank is chasing. <0: Disable>", FCVAR_NOTIFY, true, 0.0);
+	g_hCvar_TankSupport_MinDist						= CreateConVar("l4d2_improvedbots_tank_support_min_distance", "800", "A bot supporting a chased survivor stops advancing this far from the tank. Below 768 it starts fleeing before it stops.", FCVAR_NOTIFY, true, 0.0);
 	g_hCvar_AvoidTanksWithProp						= CreateConVar("l4d2_improvedbots_avoidtanksnearpunchableprops", "1", "If bots should avoid and retreat from tanks that are nearby punchable props like cars.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_hCvar_NoFallDmgOnLadderFail					= CreateConVar("l4d2_improvedbots_nofalldmgonladderfail", "1", "If enabled, survivor bots won't take fall damage if they were climbing a ladder just before that.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
@@ -904,6 +916,8 @@ void CreateAndHookConVars()
 	g_hCvar_DontSwitchToPistol.AddChangeHook(OnConVarChanged);
 	g_hCvar_TakeCoverFromRocks.AddChangeHook(OnConVarChanged);
 	g_hCvar_TankTeamLeash.AddChangeHook(OnConVarChanged);
+	g_hCvar_TankSupport_Range.AddChangeHook(OnConVarChanged);
+	g_hCvar_TankSupport_MinDist.AddChangeHook(OnConVarChanged);
 	g_hCvar_AvoidTanksWithProp.AddChangeHook(OnConVarChanged);
 	g_hCvar_NoFallDmgOnLadderFail.AddChangeHook(OnConVarChanged);
 
@@ -1042,6 +1056,8 @@ void UpdateConVarValues()
 	g_bCvar_DontSwitchToPistol							= g_hCvar_DontSwitchToPistol.BoolValue;
 	g_bCvar_TakeCoverFromRocks							= g_hCvar_TakeCoverFromRocks.BoolValue;
 	g_fCvar_TankTeamLeash								= g_hCvar_TankTeamLeash.FloatValue;
+	g_fCvar_TankSupport_RangeSqr						= (g_hCvar_TankSupport_Range.FloatValue*g_hCvar_TankSupport_Range.FloatValue);
+	g_fCvar_TankSupport_MinDist							= g_hCvar_TankSupport_MinDist.FloatValue;
 	g_bCvar_AvoidTanksWithProp							= g_hCvar_AvoidTanksWithProp.BoolValue;
 	g_bCvar_NoFallDmgOnLadderFail						= g_hCvar_NoFallDmgOnLadderFail.BoolValue;
 
@@ -1271,6 +1287,10 @@ void ResetClientPluginVariables(int iClient)
 	g_bBotProcessing_IsProcessed[iClient] = false;
 	g_fSurvivorBot_NextTankCoverSearchTime[iClient] = 0.0;
 	g_fSurvivorBot_NextTeamRegroupTime[iClient] = 0.0;
+	g_fSurvivorBot_NextTankSupportTime[iClient] = 0.0;
+	g_iSurvivorBot_SupportVictim[iClient] = 0;
+	g_fSurvivorBot_SupportVictimUntil[iClient] = 0.0;
+	g_bSurvivorBot_SupportingVictim[iClient] = false;
 
 	g_iSurvivorBot_TargetInfected[iClient] = -1;	
 	g_iSurvivorBot_WitchTarget[iClient] = -1;	
@@ -2086,9 +2106,12 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 		float fHeightDist = (fTankDist + (g_fClientAbsOrigin[iClient][2] - g_fClientAbsOrigin[iTankTarget][2]));
 
 		if (fTankDist <= BOT_TANK_KEEP_AWAY_DIST_SQR)ClearMoveToPosition(iClient, "RegroupTeam");
-		bool bRegrouping = (fTankDist > BOT_TANK_KEEP_AWAY_DIST_SQR && (strcmp(g_sSurvivorBot_MovePos_Name[iClient], "RegroupTeam") == 0 || IsPositionAwayFromTeam(g_fClientAbsOrigin[iClient]) && TryRegroupWithTeam(iClient)));
+		if (fTankDist <= (g_fCvar_TankSupport_MinDist*g_fCvar_TankSupport_MinDist))ClearMoveToPosition(iClient, "SupportChased", "too close to tank");
+		UpdateTankSupport(iClient);
+		bool bSupporting = (strcmp(g_sSurvivorBot_MovePos_Name[iClient], "SupportChased") == 0);
+		bool bRegrouping = (!g_bSurvivorBot_SupportingVictim[iClient] && fTankDist > BOT_TANK_KEEP_AWAY_DIST_SQR && (strcmp(g_sSurvivorBot_MovePos_Name[iClient], "RegroupTeam") == 0 || IsPositionAwayFromTeam(g_fClientAbsOrigin[iClient]) && TryRegroupWithTeam(iClient)));
 
-		if (!bRegrouping && fHeightDist <= 1638400.0 && (g_bCvar_AvoidTanksWithProp && IsEntityExists(iTankProp) || g_bCvar_TakeCoverFromRocks && g_bInfectedBot_IsThrowing[iTankTarget]) && (iVictim == iClient || GetClientDistance(iClient, iVictim, true) <= 65536.0) && IsVisibleEntity(iClient, iTankTarget, MASK_SHOT_HULL))
+		if (!bRegrouping && !bSupporting && fHeightDist <= 1638400.0 && (g_bCvar_AvoidTanksWithProp && IsEntityExists(iTankProp) || g_bCvar_TakeCoverFromRocks && g_bInfectedBot_IsThrowing[iTankTarget]) && (iVictim == iClient || GetClientDistance(iClient, iVictim, true) <= 65536.0) && IsVisibleEntity(iClient, iTankTarget, MASK_SHOT_HULL))
 		{
 			// Staying near the team rejects more candidates, and each failed search costs up to 10 VScript calls.
 			if (strcmp(g_sSurvivorBot_MovePos_Name[iClient], "TakeCover") != 0 && GetGameTime() > g_fSurvivorBot_NextTankCoverSearchTime[iClient])
@@ -2097,7 +2120,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 					g_fSurvivorBot_NextTankCoverSearchTime[iClient] = GetGameTime() + 0.5;
 			}
 		}
-		else if (!bRegrouping)
+		else if (!bRegrouping && !bSupporting)
 		{
 			bool bTankVisible = IsVisibleEntity(iClient, iTankTarget, MASK_SHOT_HULL);
 			if (!g_bInfectedBot_IsThrowing[iTankTarget] || !bTankVisible)
@@ -2122,9 +2145,11 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 			}
 		}
 	}
-	else if (L4D2_IsTankInPlay() && strcmp(g_sSurvivorBot_MovePos_Name[iClient], "RegroupTeam") != 0 && IsPositionAwayFromTeam(g_fClientAbsOrigin[iClient]))
+	else if (L4D2_IsTankInPlay())
 	{
-		TryRegroupWithTeam(iClient);
+		UpdateTankSupport(iClient);
+		if (!g_bSurvivorBot_SupportingVictim[iClient] && strcmp(g_sSurvivorBot_MovePos_Name[iClient], "RegroupTeam") != 0 && IsPositionAwayFromTeam(g_fClientAbsOrigin[iClient]))
+			TryRegroupWithTeam(iClient);
 	}
 
 	int iWitchTarget = g_iSurvivorBot_WitchTarget[iClient];
@@ -2923,6 +2948,131 @@ bool IsPositionAwayFromTeam(const float fPos[3])
 
 	int iAnchor = GetTeamAnchor();
 	return (iAnchor != 0 && GetVectorDistance(g_fClientAbsOrigin[iAnchor], fPos, true) > (g_fCvar_TankTeamLeash*g_fCvar_TankTeamLeash));
+}
+
+// A player-controlled tank never goes through L4D2_OnChooseVictim, and the AI's choice can be someone it already downed.
+// Both fall back to the standing survivor closest to the tank.
+int GetTankChaseVictim(int iTank)
+{
+	int iVictim = g_iInfectedBot_CurrentVictim[iTank];
+	if (IsFakeClient(iTank) && IsClientSurvivor(iVictim) && !L4D_IsPlayerIncapacitated(iVictim))
+		return iVictim;
+
+	iVictim = 0;
+	float fCurDist, fLastDist = -1.0;
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (!IsClientSurvivor(i) || L4D_IsPlayerIncapacitated(i))
+			continue;
+
+		fCurDist = GetClientDistance(iTank, i, true);
+		if (fLastDist != -1.0 && fCurDist >= fLastDist)
+			continue;
+
+		iVictim = i;
+		fLastDist = fCurDist;
+	}
+	return iVictim;
+}
+
+// Returns 0 while the closest tank is too far from its victim to count as chasing it.
+int GetTankSupportVictim(int iClient, int &iTank)
+{
+	iTank = 0;
+	float fCurDist, fLastDist = -1.0;
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (!IsSpecialInfected(i) || L4D2_GetPlayerZombieClass(i) != L4D2ZombieClass_Tank || L4D_IsPlayerIncapacitated(i))
+			continue;
+
+		fCurDist = GetClientDistance(iClient, i, true);
+		if (fLastDist != -1.0 && fCurDist >= fLastDist)
+			continue;
+
+		iTank = i;
+		fLastDist = fCurDist;
+	}
+	if (!iTank)
+		return 0;
+
+	// Holding the choice for a moment keeps the bot from turning around on every victim change.
+	int iVictim = g_iSurvivorBot_SupportVictim[iClient];
+	if (GetGameTime() >= g_fSurvivorBot_SupportVictimUntil[iClient] || !IsClientSurvivor(iVictim) || L4D_IsPlayerIncapacitated(iVictim))
+	{
+		iVictim = GetTankChaseVictim(iTank);
+		g_iSurvivorBot_SupportVictim[iClient] = iVictim;
+		g_fSurvivorBot_SupportVictimUntil[iClient] = GetGameTime() + 1.0;
+	}
+
+	return (iVictim != 0 && GetClientDistance(iTank, iVictim, true) <= BOT_TANK_CHASE_DIST_SQR ? iVictim : 0);
+}
+
+// Moves the bot toward the survivor a tank is chasing. The tank is usually between them, so unlike
+// a regroup this ignores the path danger check and relies on stopping short of the tank instead.
+void UpdateTankSupport(int iClient)
+{
+	if (g_fCvar_TankSupport_RangeSqr <= 0.0)
+	{
+		g_bSurvivorBot_SupportingVictim[iClient] = false;
+		return;
+	}
+
+	float fNow = GetGameTime();
+	if (fNow <= g_fSurvivorBot_NextTankSupportTime[iClient])
+		return;
+
+	g_fSurvivorBot_NextTankSupportTime[iClient] = fNow + 0.5;
+
+	int iTank, iVictim = GetTankSupportVictim(iClient, iTank);
+	g_bSurvivorBot_SupportingVictim[iClient] = (iVictim != 0 && iVictim != iClient && !L4D_IsPlayerIncapacitated(iClient) && !L4D_IsPlayerPinned(iClient));
+	if (!g_bSurvivorBot_SupportingVictim[iClient])
+	{
+		ClearMoveToPosition(iClient, "SupportChased", "no one to support");
+		return;
+	}
+
+	ClearMoveToPosition(iClient, "RegroupTeam", "supporting chased survivor");
+
+	float fVictimDist = GetClientDistance(iClient, iVictim, true);
+	bool bSeesTank = IsVisibleEntity(iClient, iTank, MASK_SHOT_HULL);
+
+	if (strcmp(g_sSurvivorBot_MovePos_Name[iClient], "SupportChased") == 0)
+	{
+		// Stopping well inside the range keeps the bot from flipping between moving and holding at its edge.
+		if (bSeesTank && fVictimDist <= (g_fCvar_TankSupport_RangeSqr * 0.44))
+		{
+			ClearMoveToPosition(iClient, "SupportChased", "in range and sees tank");
+			return;
+		}
+
+		g_fSurvivorBot_MovePos_Position[iClient] = g_fClientAbsOrigin[iVictim];
+		g_bSurvivorBot_MovePos_AreasCached[iClient] = false;
+		g_fSurvivorBot_MovePos_Duration[iClient] = fNow + 2.0;
+		return;
+	}
+
+	if (fVictimDist <= g_fCvar_TankSupport_RangeSqr && (bSeesTank || fVictimDist <= BOT_TANK_SUPPORT_CLOSE_DIST_SQR))
+		return;
+
+	// Resuming farther than where it stopped, so a tank walking away doesn't make the bot stutter.
+	float fResumeDist = (g_fCvar_TankSupport_MinDist + 100.0);
+	if (GetClientDistance(iClient, iTank, true) <= (fResumeDist*fResumeDist))
+	{
+		if (g_bCvar_Debug)LogMessage("[SB-AI DEBUG] client=%d(%N) SUPPORT-HOLD victim=%d(%N) reason=tank too close", iClient, iClient, iVictim, iVictim);
+		return;
+	}
+
+	if (IsSurvivorBusy(iClient))
+		return;
+
+	ClearMoveToPosition(iClient, "ScavengeItem");
+	ClearMoveToPosition(iClient, "ApproachMelee");
+
+	float fGoalPos[3]; fGoalPos = g_fClientAbsOrigin[iVictim];
+	SetMoveToPosition(iClient, fGoalPos, 2, "SupportChased", 0.66, SquareRoot(BOT_TANK_SUPPORT_CLOSE_DIST_SQR));
+
+	if (g_bCvar_Debug && strcmp(g_sSurvivorBot_MovePos_Name[iClient], "SupportChased") == 0)
+		LogMessage("[SB-AI DEBUG] client=%d(%N) SUPPORT-START victim=%d(%N) tank=%d victimDist=%.1f seesTank=%d", iClient, iClient, iVictim, iVictim, iTank, SquareRoot(fVictimDist), bSeesTank);
 }
 
 bool TryRegroupWithTeam(int iClient)
