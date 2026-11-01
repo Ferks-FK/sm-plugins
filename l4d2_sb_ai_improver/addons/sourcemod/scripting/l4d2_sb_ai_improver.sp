@@ -310,6 +310,7 @@ static float g_fSurvivorBot_NextWitchMoveUpdateTime[MAXPLAYERS+1];
 
 static bool g_bSurvivorBot_PreventFire[MAXPLAYERS+1];
 static float g_fSurvivorBot_TankFleeUntil[MAXPLAYERS+1];
+static float g_fDebug_NextFleeAimLogTime[MAXPLAYERS+1];
 
 static bool g_bClient_IsLookingAtPosition[MAXPLAYERS+1];
 static bool g_bClient_IsFiringWeapon[MAXPLAYERS+1];
@@ -1281,6 +1282,7 @@ void ResetClientPluginVariables(int iClient)
 
 	g_bSurvivorBot_IsWitchHarasser[iClient] = false;
 	g_fSurvivorBot_TankFleeUntil[iClient] = 0.0;
+	g_fDebug_NextFleeAimLogTime[iClient] = 0.0;
 	g_bSurvivorBot_ForceWeaponReload[iClient] = false;
 	g_bSurvivorBot_ForceSwitchWeapon[iClient] = false;
 	g_bSurvivorBot_ForceBash[iClient] = false;
@@ -2304,6 +2306,12 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 		}
 	}
 
+	if (g_bCvar_Debug && IsValidClient(iTankTarget) && GetGameTime() < g_fSurvivorBot_TankFleeUntil[iClient] && GetGameTime() > g_fDebug_NextFleeAimLogTime[iClient] && (IsValidClient(iPinnedFriend) || IsSurvivorBusy(iClient)))
+	{
+		g_fDebug_NextFleeAimLogTime[iClient] = GetGameTime() + 0.5;
+		LogMessage("[SB-AI DEBUG] client=%d(%N) FLEE-AIM-SKIP pinnedFriend=%d busy=%d", iClient, iClient, iPinnedFriend, IsSurvivorBusy(iClient));
+	}
+
 	if (g_bCvar_TargetSelection_Enabled && !IsValidClient(iPinnedFriend) && !IsSurvivorBusy(iClient) && (IsValidClient(iTankTarget) || IsEntityExists(iInfectedTarget)))
 	{
 		int iFireTarget = iInfectedTarget;
@@ -2313,7 +2321,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 			{
 				iFireTarget = -1;
 			}
-			if (IsValidClient(iTankTarget) && (fInfectedDist > 1048576.0 || GetClientDistance(iClient, iTankTarget, true) < fInfectedDist))
+			if (IsValidClient(iTankTarget) && (iFireTarget == -1 || fInfectedDist > 1048576.0 || GetClientDistance(iClient, iTankTarget, true) < fInfectedDist))
 			{
 				iFireTarget = iTankTarget;
 			}
@@ -2325,8 +2333,13 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 
 		// A closer common would win the choice above, and one behind the bot fails the view cone check, so it would run from the tank without firing at all.
 		// Only with a gun or melee weapon in hand: holding a grenade, this aim would replace the arc of the throw.
-		bool bFleeingTank = ((iCurWeapon == iWpnSlots[0] || iCurWeapon == iWpnSlots[1]) && !L4D_IsPlayerIncapacitated(iClient) && IsValidClient(iTankTarget) && (GetGameTime() < g_fSurvivorBot_TankFleeUntil[iClient] || GetClientDistance(iClient, iTankTarget, true) <= 589824.0) && IsVisibleEntity(iClient, iTankTarget, MASK_SHOT_HULL));
+		bool bFleeingTank = ((iCurWeapon == iWpnSlots[0] || iCurWeapon == iWpnSlots[1]) && !L4D_IsPlayerIncapacitated(iClient) && IsValidClient(iTankTarget) && (GetGameTime() < g_fSurvivorBot_TankFleeUntil[iClient] || GetClientDistance(iClient, iTankTarget, true) <= 589824.0 || g_iInfectedBot_CurrentVictim[iTankTarget] == iClient && GetClientDistance(iClient, iTankTarget, true) <= (g_fCvar_TargetSelection_ShootRange*g_fCvar_TargetSelection_ShootRange)) && IsVisibleEntity(iClient, iTankTarget, MASK_SHOT_HULL));
 		if (bFleeingTank)iFireTarget = iTankTarget;
+		else if (g_bCvar_Debug && IsValidClient(iTankTarget) && GetGameTime() < g_fSurvivorBot_TankFleeUntil[iClient] && GetGameTime() > g_fDebug_NextFleeAimLogTime[iClient])
+		{
+			g_fDebug_NextFleeAimLogTime[iClient] = GetGameTime() + 0.5;
+			LogMessage("[SB-AI DEBUG] client=%d(%N) FLEE-AIM-SKIP visible=%d gunInHand=%d", iClient, iClient, IsVisibleEntity(iClient, iTankTarget, MASK_SHOT_HULL), (iCurWeapon == iWpnSlots[0] || iCurWeapon == iWpnSlots[1]));
+		}
 
 		if (IsEntityExists(iFireTarget) && (bFleeingTank || HasVisualContactWithEntity(iClient, iFireTarget, (iFireTarget != iTankTarget))))
 		{
@@ -2391,6 +2404,15 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 						PressAttackButton(iClient, iButtons);
 					}
 				}
+			}
+
+			if (g_bCvar_Debug && bFleeingTank && GetGameTime() > g_fDebug_NextFleeAimLogTime[iClient])
+			{
+				g_fDebug_NextFleeAimLogTime[iClient] = GetGameTime() + 0.5;
+
+				// The yaw comes from this tick's command, so a value that stays near 180 means the aim from the previous ticks did not stick.
+				float fAimAngles[3]; MakeVectorFromPoints(g_fClientEyePos[iClient], fFirePos, fAimAngles); GetVectorAngles(fAimAngles, fAimAngles);
+				LogMessage("[SB-AI DEBUG] client=%d(%N) FLEE-AIM tank=%d dist=%.1f yawOff=%.1f slot=%d clip=%d reloading=%d preventFire=%d looked=%d fired=%d", iClient, iClient, iFireTarget, SquareRoot(fTargetDist), FloatAbs(NormalizeAngle(fAimAngles[1] - g_fClientEyeAng[iClient][1])), (iCurWeapon == iWpnSlots[0] ? 0 : 1), GetWeaponClip1(iCurWeapon), IsWeaponReloading(iCurWeapon), g_bSurvivorBot_PreventFire[iClient], g_bClient_IsLookingAtPosition[iClient], g_bClient_IsFiringWeapon[iClient]);
 			}
 		}
 	}
