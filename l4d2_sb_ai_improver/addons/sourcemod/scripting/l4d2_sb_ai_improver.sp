@@ -22,6 +22,7 @@ public Plugin myinfo =
 
 #define MAXENTITIES 				2048
 
+#define BOT_WITCH_CHECK_DIST_SQR		4000000.0
 #define BOT_BOOMER_AVOID_RADIUS_SQR		40000.0
 #define BOT_GRENADE_CHECK_RADIUS_SQR	90000.0
 #define BOT_CMD_MOVE_INTERVAL 		0.8
@@ -466,7 +467,8 @@ static int g_iDebug_Last_AlivePlayers[MAXPLAYERS+1] = {-999, ...};
 static int g_iDebug_Last_HumanOnTeam[MAXPLAYERS+1] = {-999, ...};
 
 static float g_fDebug_NextTankLogTime[MAXPLAYERS+1];
-static float g_fDebug_NextWitchLogTime[MAXPLAYERS+1];
+static int g_iDebug_Last_WitchCheckTarget[MAXPLAYERS+1] = {-999, ...};
+static int g_iDebug_Last_WitchCheckHarasser[MAXPLAYERS+1] = {-999, ...};
 static float g_fDebug_NextScavengeLogTime[MAXPLAYERS+1];
 static float g_fDebug_NextMovePosLogTime[MAXPLAYERS+1];
 
@@ -2104,12 +2106,14 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 	}
 
 	int iWitchTarget = g_iSurvivorBot_WitchTarget[iClient];
-	if (IsEntityExists(iWitchTarget) && GetEntityHealth(iWitchTarget) > 0)
+	// An angered witch stays in, since a sniper can shoot her from beyond this distance.
+	if (IsEntityExists(iWitchTarget) && GetEntityHealth(iWitchTarget) > 0 && (IsValidClient(iWitchHarasser) || GetEntityDistance(iClient, iWitchTarget, true) <= BOT_WITCH_CHECK_DIST_SQR))
 	{
-		if (g_bCvar_Debug && GetGameTime() > g_fDebug_NextWitchLogTime[iClient])
+		if (g_bCvar_Debug && (iWitchTarget != g_iDebug_Last_WitchCheckTarget[iClient] || iWitchHarasser != g_iDebug_Last_WitchCheckHarasser[iClient]))
 		{
-			g_fDebug_NextWitchLogTime[iClient] = GetGameTime() + 0.5;
-			LogMessage("[SB-AI DEBUG] client=%d(%N) WITCH-CHECK witchTarget=%d witchHarasser=%d(%N)", iClient, iClient, iWitchTarget, iWitchHarasser, iWitchHarasser);
+			g_iDebug_Last_WitchCheckTarget[iClient] = iWitchTarget;
+			g_iDebug_Last_WitchCheckHarasser[iClient] = iWitchHarasser;
+			LogMessage("[SB-AI DEBUG] client=%d(%N) WITCH-CHECK witchTarget=%d witchHarasser=%d(%N) dist=%.1f", iClient, iClient, iWitchTarget, iWitchHarasser, iWitchHarasser, GetEntityDistance(iClient, iWitchTarget));
 		}
 
 		float fWitchOrigin[3]; GetEntityAbsOrigin(iWitchTarget, fWitchOrigin);
