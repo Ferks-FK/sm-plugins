@@ -394,11 +394,14 @@ static float g_fHasAliveSurvivorBots_NextCheck;
 // Valid until the next SetMoveToPosition, since the goal position cannot change before that.
 static float g_fSurvivorBot_NextTankCoverSearchTime[MAXPLAYERS+1];
 static float g_fSurvivorBot_NextTeamRegroupTime[MAXPLAYERS+1];
+static int g_iTeamAnchor;
+static int g_iTeamAnchor_Tick = -1;
 
 static int g_iSurvivorBot_RescueFriend[MAXPLAYERS+1];
 static float g_fSurvivorBot_RescueUntil[MAXPLAYERS+1];
 static bool g_bSurvivorBot_RetreatCommanded[MAXPLAYERS+1];
 static float g_fDebug_NextRescueLogTime[MAXPLAYERS+1];
+static float g_fDebug_NextRescueAbandonLogTime[MAXPLAYERS+1];
 
 static bool g_bSurvivorBot_MovePos_AreasCached[MAXPLAYERS+1];
 static int g_iSurvivorBot_MovePos_Area[MAXPLAYERS+1];
@@ -790,7 +793,7 @@ void CreateAndHookConVars()
 	g_hCvar_DeployUpgradePacks						= CreateConVar("l4d2_improvedbots_deployupgradepacks", "1", "If bots should deploy their upgrade pack when available and not in combat.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_hCvar_DontSwitchToPistol						= CreateConVar("l4d2_improvedbots_dontswitchtopistol", "1", "If bots shouldn't switch to their pistol while they have sniper rifle equiped.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_hCvar_TakeCoverFromRocks						= CreateConVar("l4d2_improvedbots_takecoverfromtankrocks", "1", "If bots should take cover from tank's thrown rocks.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
-	g_hCvar_TankTeamLeash							= CreateConVar("l4d2_improvedbots_tank_team_leash", "600", "How far from the nearest standing teammate a bot may be while a tank is around. Farther than this, it regroups instead of fleeing. <0: Disable>", FCVAR_NOTIFY, true, 0.0);
+	g_hCvar_TankTeamLeash							= CreateConVar("l4d2_improvedbots_tank_team_leash", "600", "How far from the team a bot may be while a tank is alive. Farther than this, it regroups instead of fleeing. <0: Disable>", FCVAR_NOTIFY, true, 0.0);
 	g_hCvar_TankRescue_Range						= CreateConVar("l4d2_improvedbots_tank_rescue_range", "800", "How close a downed survivor must be for a bot to go help it while a tank is alive. <0: Disable>", FCVAR_NOTIFY, true, 0.0);
 	g_hCvar_TankRescue_SafeDist						= CreateConVar("l4d2_improvedbots_tank_rescue_safe_distance", "400", "A rescue only starts if the tank is farther than this from both the bot and the downed survivor.", FCVAR_NOTIFY, true, 0.0);
 	g_hCvar_TankRescue_AbortDist						= CreateConVar("l4d2_improvedbots_tank_rescue_abort_distance", "200", "An ongoing rescue is dropped if the tank gets closer than this to the bot or the downed survivor.", FCVAR_NOTIFY, true, 0.0);
@@ -1293,6 +1296,7 @@ void ResetClientPluginVariables(int iClient)
 	g_fSurvivorBot_RescueUntil[iClient] = 0.0;
 	g_bSurvivorBot_RetreatCommanded[iClient] = false;
 	g_fDebug_NextRescueLogTime[iClient] = 0.0;
+	g_fDebug_NextRescueAbandonLogTime[iClient] = 0.0;
 
 	g_iSurvivorBot_TargetInfected[iClient] = -1;	
 	g_iSurvivorBot_WitchTarget[iClient] = -1;	
@@ -2121,7 +2125,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 		}
 
 		if (fTankDist <= BOT_TANK_KEEP_AWAY_DIST_SQR)ClearMoveToPosition(iClient, "RegroupTeam");
-		bool bRegrouping = (!bRescuing && fTankDist > BOT_TANK_KEEP_AWAY_DIST_SQR && (strcmp(g_sSurvivorBot_MovePos_Name[iClient], "RegroupTeam") == 0 || IsPositionAwayFromTeam(iClient, g_fClientAbsOrigin[iClient]) && TryRegroupWithTeam(iClient, iTankTarget)));
+		bool bRegrouping = (!bRescuing && fTankDist > BOT_TANK_KEEP_AWAY_DIST_SQR && (strcmp(g_sSurvivorBot_MovePos_Name[iClient], "RegroupTeam") == 0 || IsPositionAwayFromTeam(g_fClientAbsOrigin[iClient]) && TryRegroupWithTeam(iClient)));
 
 		if (!bRescuing && !bRegrouping && fHeightDist <= 1638400.0 && (g_bCvar_AvoidTanksWithProp && IsEntityExists(iTankProp) || g_bCvar_TakeCoverFromRocks && g_bInfectedBot_IsThrowing[iTankTarget]) && (iVictim == iClient || GetClientDistance(iClient, iVictim, true) <= 65536.0) && IsVisibleEntity(iClient, iTankTarget, MASK_SHOT_HULL))
 		{
@@ -2157,6 +2161,10 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 				PressAttackButton(iClient, iButtons);
 			}
 		}
+	}
+	else if (L4D2_IsTankInPlay() && GetGameTime() >= g_fSurvivorBot_RescueUntil[iClient] && strcmp(g_sSurvivorBot_MovePos_Name[iClient], "RegroupTeam") != 0 && IsPositionAwayFromTeam(g_fClientAbsOrigin[iClient]))
+	{
+		TryRegroupWithTeam(iClient);
 	}
 
 	int iWitchTarget = g_iSurvivorBot_WitchTarget[iClient];
@@ -2896,34 +2904,65 @@ Action OnSurvivorTakeDamage(int iClient, int &iAttacker, int &iInflictor, float 
 	return Plugin_Continue; 
 }
 
-// Downed or pinned teammates are usually next to the threat, so they don't count as a place to stay close to.
-int GetClosestStandingTeammate(int iClient, const float fPos[3], float &fClosestDist = 0.0)
+bool IsThreatenedByTank(int iClient)
 {
-	int iClosest;
-	float fCurDist;
-	fClosestDist = -1.0;
 	for (int i = 1; i <= MaxClients; i++)
 	{
-		if (i == iClient || !IsClientSurvivor(i) || L4D_IsPlayerIncapacitated(i) || L4D_IsPlayerPinned(i))
+		if (!IsSpecialInfected(i) || L4D2_GetPlayerZombieClass(i) != L4D2ZombieClass_Tank || L4D_IsPlayerIncapacitated(i))
 			continue;
 
-		fCurDist = GetVectorDistance(g_fClientAbsOrigin[i], fPos, true);
-		if (fClosestDist != -1.0 && fCurDist >= fClosestDist)
-			continue;
-
-		iClosest = i;
-		fClosestDist = fCurDist;
+		if (g_iInfectedBot_CurrentVictim[i] == iClient || GetClientDistance(i, iClient, true) <= BOT_TANK_KEEP_AWAY_DIST_SQR)
+			return true;
 	}
-	return iClosest;
+	return false;
 }
 
-bool IsPositionAwayFromTeam(int iClient, const float fPos[3])
+// The standing survivor closest to the others, skipping anyone a tank is near or after.
+// Measuring the leash from one shared point keeps the team from settling into separate
+// pairs, which a distance to the nearest teammate would allow.
+int GetTeamAnchor()
+{
+	int iTick = GetGameTickCount();
+	if (iTick == g_iTeamAnchor_Tick)
+		return g_iTeamAnchor;
+
+	g_iTeamAnchor_Tick = iTick;
+	g_iTeamAnchor = 0;
+
+	int iCandidates[MAXPLAYERS+1], iCount;
+	for (int i = 1; i <= MaxClients; i++)
+	{
+		if (!IsClientSurvivor(i) || L4D_IsPlayerIncapacitated(i) || L4D_IsPlayerPinned(i) || IsThreatenedByTank(i))
+			continue;
+
+		iCandidates[iCount++] = i;
+	}
+
+	float fSum, fLowestSum = -1.0;
+	for (int i = 0; i < iCount; i++)
+	{
+		fSum = 0.0;
+		for (int j = 0; j < iCount; j++)
+		{
+			fSum += GetClientDistance(iCandidates[i], iCandidates[j]);
+		}
+
+		if (fLowestSum != -1.0 && fSum >= fLowestSum)
+			continue;
+
+		g_iTeamAnchor = iCandidates[i];
+		fLowestSum = fSum;
+	}
+	return g_iTeamAnchor;
+}
+
+bool IsPositionAwayFromTeam(const float fPos[3])
 {
 	if (g_fCvar_TankTeamLeash <= 0.0)
 		return false;
 
-	float fDist;
-	return (GetClosestStandingTeammate(iClient, fPos, fDist) != 0 && fDist > (g_fCvar_TankTeamLeash*g_fCvar_TankTeamLeash));
+	int iAnchor = GetTeamAnchor();
+	return (iAnchor != 0 && GetVectorDistance(g_fClientAbsOrigin[iAnchor], fPos, true) > (g_fCvar_TankTeamLeash*g_fCvar_TankTeamLeash));
 }
 
 bool DenyTankRescue(int iBot, int iFriend, const char[] sReason)
@@ -3001,20 +3040,24 @@ bool IsRescuingFriendFromTank(int iClient)
 	return (CanRescueFriendFromTank(iClient, iFriend));
 }
 
-bool TryRegroupWithTeam(int iClient, int iTank)
+bool TryRegroupWithTeam(int iClient)
 {
-	if (GetGameTime() <= g_fSurvivorBot_NextTeamRegroupTime[iClient])
+	if (GetGameTime() <= g_fSurvivorBot_NextTeamRegroupTime[iClient] || L4D_IsPlayerIncapacitated(iClient) || L4D_IsPlayerPinned(iClient) || IsSurvivorBusy(iClient))
 		return false;
 
 	g_fSurvivorBot_NextTeamRegroupTime[iClient] = GetGameTime() + 0.5;
 
-	int iTeammate = GetClosestStandingTeammate(iClient, g_fClientAbsOrigin[iClient]);
-	if (!iTeammate || GetClientDistance(iTeammate, iTank, true) <= BOT_TANK_KEEP_AWAY_DIST_SQR)
+	int iAnchor = GetTeamAnchor();
+	if (!iAnchor || iAnchor == iClient)
 		return false;
 
-	float fGoalPos[3]; fGoalPos = g_fClientAbsOrigin[iTeammate];
-	if (LBI_IsPathToPositionDangerous(iClient, fGoalPos, LBI_PDSLOT_TEAM) != -1)
+	float fGoalPos[3]; fGoalPos = g_fClientAbsOrigin[iAnchor];
+	int iPathDangerous = LBI_IsPathToPositionDangerous(iClient, fGoalPos, LBI_PDSLOT_TEAM);
+	if (iPathDangerous != -1)
+	{
+		if (g_bCvar_Debug)LogMessage("[SB-AI DEBUG] client=%d(%N) REGROUP-BLOCKED anchor=%d(%N) pathResult=%d", iClient, iClient, iAnchor, iAnchor, iPathDangerous);
 		return false;
+	}
 
 	ClearMoveToPosition(iClient, "ScavengeItem");
 	ClearMoveToPosition(iClient, "ApproachMelee");
@@ -3038,7 +3081,7 @@ bool TakeCoverFromPosition(int iClient, float fPosition[3], float fSearchDist = 
 	{
 		LBI_TryGetPathableLocationWithin(iClient, fSearchDist, fPathPos);
 		if (!IsValidVector(fPathPos) || LBI_IsDamagingPosition(fPathPos))continue;
-		if (bStayNearTeam && (GetVectorDistance(fPathPos, fPosition, true) <= BOT_TANK_KEEP_AWAY_DIST_SQR || IsPositionAwayFromTeam(iClient, fPathPos)))continue;
+		if (bStayNearTeam && (GetVectorDistance(fPathPos, fPosition, true) <= BOT_TANK_KEEP_AWAY_DIST_SQR || IsPositionAwayFromTeam(fPathPos)))continue;
 
 		fPathOffset = fPathPos; fPathOffset[2] + HUMAN_HALF_HEIGHT;
 
@@ -6558,7 +6601,11 @@ Action OnMoveToIncapacitatedFriendAction(BehaviorAction hAction, int iActor, flo
 	int iPathDangerous = LBI_IsPathToPositionDangerous(iActor, g_fClientAbsOrigin[iFriend], LBI_PDSLOT_RESCUE);
 	if (iPathDangerous == -1)return Plugin_Continue;
 
-	if (g_bCvar_Debug)LogMessage("[SB-AI DEBUG] client=%d(%N) RESCUE-ABANDONED friend=%d(%N) pathResult=%d", iActor, iActor, iFriend, iFriend, iPathDangerous);
+	if (g_bCvar_Debug && GetGameTime() > g_fDebug_NextRescueAbandonLogTime[iActor])
+	{
+		g_fDebug_NextRescueAbandonLogTime[iActor] = GetGameTime() + 1.0;
+		LogMessage("[SB-AI DEBUG] client=%d(%N) RESCUE-ABANDONED friend=%d(%N) pathResult=%d", iActor, iActor, iFriend, iFriend, iPathDangerous);
+	}
 
 	if (iPathDangerous != 0)
 	{
