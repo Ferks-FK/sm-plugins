@@ -287,6 +287,7 @@ static ConVar g_hCvar_TankRescue_SafeDist;
 static ConVar g_hCvar_TankRescue_AbortDist;
 static ConVar g_hCvar_TankSupport_Range;
 static ConVar g_hCvar_TankSupport_MinDist;
+static ConVar g_hCvar_TankFleeDist;
 static ConVar g_hCvar_AvoidTanksWithProp;
 static ConVar g_hCvar_NoFallDmgOnLadderFail;
 
@@ -303,6 +304,7 @@ static float g_fCvar_TankRescue_SafeDistSqr;
 static float g_fCvar_TankRescue_AbortDistSqr;
 static float g_fCvar_TankSupport_RangeSqr;
 static float g_fCvar_TankSupport_MinDist;
+static float g_fCvar_TankFleeDistSqr;
 static bool g_bCvar_AvoidTanksWithProp;
 static bool g_bCvar_NoFallDmgOnLadderFail;
 
@@ -807,8 +809,9 @@ void CreateAndHookConVars()
 	g_hCvar_TankRescue_Range						= CreateConVar("l4d2_improvedbots_tank_rescue_range", "800", "How close a downed survivor must be for a bot to go help it while a tank is alive. <0: Disable>", FCVAR_NOTIFY, true, 0.0);
 	g_hCvar_TankRescue_SafeDist						= CreateConVar("l4d2_improvedbots_tank_rescue_safe_distance", "400", "A rescue only starts if the tank is farther than this from both the bot and the downed survivor.", FCVAR_NOTIFY, true, 0.0);
 	g_hCvar_TankRescue_AbortDist						= CreateConVar("l4d2_improvedbots_tank_rescue_abort_distance", "200", "An ongoing rescue is dropped if the tank gets closer than this to the bot or the downed survivor.", FCVAR_NOTIFY, true, 0.0);
-	g_hCvar_TankSupport_Range						= CreateConVar("l4d2_improvedbots_tank_support_range", "600", "How close a bot tries to stay to the survivor a tank is chasing. <0: Disable>", FCVAR_NOTIFY, true, 0.0);
-	g_hCvar_TankSupport_MinDist						= CreateConVar("l4d2_improvedbots_tank_support_min_distance", "800", "A bot supporting a chased survivor stops advancing this far from the tank. Below 768 it starts fleeing before it stops.", FCVAR_NOTIFY, true, 0.0);
+	g_hCvar_TankSupport_Range						= CreateConVar("l4d2_improvedbots_tank_support_range", "450", "How close a bot tries to stay to the survivor a tank is chasing. <0: Disable>", FCVAR_NOTIFY, true, 0.0);
+	g_hCvar_TankSupport_MinDist						= CreateConVar("l4d2_improvedbots_tank_support_min_distance", "680", "A bot supporting a chased survivor stops advancing this far from the tank. Keep it above l4d2_improvedbots_tank_flee_distance, or the bot flees before it stops.", FCVAR_NOTIFY, true, 0.0);
+	g_hCvar_TankFleeDist							= CreateConVar("l4d2_improvedbots_tank_flee_distance", "650", "A bot that sees a tank flees from it at this distance.", FCVAR_NOTIFY, true, 0.0);
 	g_hCvar_AvoidTanksWithProp						= CreateConVar("l4d2_improvedbots_avoidtanksnearpunchableprops", "1", "If bots should avoid and retreat from tanks that are nearby punchable props like cars.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_hCvar_NoFallDmgOnLadderFail					= CreateConVar("l4d2_improvedbots_nofalldmgonladderfail", "1", "If enabled, survivor bots won't take fall damage if they were climbing a ladder just before that.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
@@ -936,6 +939,7 @@ void CreateAndHookConVars()
 	g_hCvar_TankRescue_AbortDist.AddChangeHook(OnConVarChanged);
 	g_hCvar_TankSupport_Range.AddChangeHook(OnConVarChanged);
 	g_hCvar_TankSupport_MinDist.AddChangeHook(OnConVarChanged);
+	g_hCvar_TankFleeDist.AddChangeHook(OnConVarChanged);
 	g_hCvar_AvoidTanksWithProp.AddChangeHook(OnConVarChanged);
 	g_hCvar_NoFallDmgOnLadderFail.AddChangeHook(OnConVarChanged);
 
@@ -1079,6 +1083,7 @@ void UpdateConVarValues()
 	g_fCvar_TankRescue_AbortDistSqr						= (g_hCvar_TankRescue_AbortDist.FloatValue*g_hCvar_TankRescue_AbortDist.FloatValue);
 	g_fCvar_TankSupport_RangeSqr						= (g_hCvar_TankSupport_Range.FloatValue*g_hCvar_TankSupport_Range.FloatValue);
 	g_fCvar_TankSupport_MinDist							= g_hCvar_TankSupport_MinDist.FloatValue;
+	g_fCvar_TankFleeDistSqr								= (g_hCvar_TankFleeDist.FloatValue*g_hCvar_TankFleeDist.FloatValue);
 	g_bCvar_AvoidTanksWithProp							= g_hCvar_AvoidTanksWithProp.BoolValue;
 	g_bCvar_NoFallDmgOnLadderFail						= g_hCvar_NoFallDmgOnLadderFail.BoolValue;
 
@@ -2168,7 +2173,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 			{
 				ClearMoveToPosition(iClient, "TakeCover");	
 			}
-			if (fTankDist <= BOT_TANK_KEEP_AWAY_DIST_SQR || fTankDist <= 589824.0 && bTankVisible)
+			if (fTankDist <= BOT_TANK_KEEP_AWAY_DIST_SQR || fTankDist <= g_fCvar_TankFleeDistSqr && bTankVisible)
 			{
 				L4D2_CommandABot(iClient, iTankTarget, BOT_CMD_RETREAT);
 				g_bSurvivorBot_RetreatCommanded[iClient] = true;
