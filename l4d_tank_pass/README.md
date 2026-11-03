@@ -2,6 +2,11 @@ Allows the tank to pass control to another player.
 
 Original: https://forums.alliedmods.net/showpost.php?p=2841587&postcount=25
 
+### v2.8.2
+
+------
+- Fixed: a frustration pass could be stolen by a second "X gets Tank" window. While the first window was open, the game offered the Tank again and opened another one. The Tank went to the chosen player and was taken right after by someone else, with no chat message and an extra pass counted. The plugin now blocks any new offer while a frustration pass is in progress.
+
 ### v2.8.1
 
 ------

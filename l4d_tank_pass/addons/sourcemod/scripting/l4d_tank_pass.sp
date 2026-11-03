@@ -1,4 +1,4 @@
-#define PLUGIN_VERSION "2.8.1"
+#define PLUGIN_VERSION "2.8.2"
 
 #pragma semicolon 1
 #pragma newdecls required
@@ -273,8 +273,10 @@ public Action L4D_OnTryOfferingTankBot(int tank_index, bool &enterStatis)
 	{
 		if (g_bFrustrationPass)
 		{
-			PrintDebug("  -> a frustration pass is already in progress. Continue.");
-			return Plugin_Continue;
+			// the frustrated holder is still offered again while our window is open; letting it
+			// through opens a 2nd window that steals the Tank right after the 1st one delivers it
+			PrintDebug("  -> a frustration pass is already in progress. Plugin_Handled (block 2nd window).");
+			return Plugin_Handled;
 		}
 
 		int target = FindRandomInfectedHuman(tank_index);
