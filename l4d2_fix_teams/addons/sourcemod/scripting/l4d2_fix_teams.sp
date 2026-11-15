@@ -119,7 +119,7 @@ Action Timer_CheckManualSpec(Handle timer, DataPack data)
     data.Reset();
     int client = GetClientOfUserId(data.ReadCell());
 
-    if (!IsClientInGame(client) || IsFakeClient(client)) return Plugin_Stop;
+    if (client <= 0 || !IsClientInGame(client) || IsFakeClient(client)) return Plugin_Stop;
 
     // If the player is still in spectator after 1s, it was a manual choice — remove from the maps.
     if (GetClientTeam(client) != L4D2_TEAM_SPECTATOR) return Plugin_Stop;
@@ -209,7 +209,7 @@ void Event_PlayerTeam(Event event, const char[] name, bool dontBroadcast)
 
     int client = GetClientOfUserId(event.GetInt("userid"));
 
-    if (!IsClientInGame(client) || IsFakeClient(client) || event.GetBool("disconnect")) return;
+    if (client <= 0 || !IsClientInGame(client) || IsFakeClient(client) || event.GetBool("disconnect")) return;
 
     if (IsNewGame())
     {

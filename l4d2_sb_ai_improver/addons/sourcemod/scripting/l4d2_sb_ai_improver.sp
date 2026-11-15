@@ -1537,7 +1537,9 @@ void Event_IntroCutsceneEnd(Event event, const char[] name, bool dontBroadcast)
 
 int GetClientWeaponInventory(int iClient, int iSlot)
 {
-	return (g_iClientInventory[iClient][iSlot]);
+	// The cached weapon can be removed before the cache updates; callers treat -1 as an empty slot.
+	int iWeapon = g_iClientInventory[iClient][iSlot];
+	return ((iWeapon > 0 && IsValidEdict(iWeapon)) ? iWeapon : -1);
 }
 
 public void L4D_OnCThrowActivate_Post(int iAbility)

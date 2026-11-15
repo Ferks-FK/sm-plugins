@@ -98,7 +98,8 @@ void SetClientFrozen(int client, bool freeze)
 
 bool IsPlayer(int client)
 {
-	if (!IsClientInGame(client))
+	// client 0 is the server console (say from the console reaches OnClientSayCommand)
+	if (client <= 0 || client > MaxClients || !IsClientInGame(client))
 		return false;
 
 	int team = GetClientTeam(client);
