@@ -1280,7 +1280,7 @@ static Handle g_hIsAvailable;
 static Handle g_hMarkNavAreaAsBlocked;
 //static Handle g_hSubdivideNavArea;
 
-static Handle g_hSurvivorLegsRetreat;
+static ActionConstructor g_hSurvivorLegsRetreat;
 
 static int g_iNavArea_Center;
 static int g_iNavArea_Parent;
@@ -1363,11 +1363,12 @@ void CreateAllSDKCalls(Handle hGameData)
 	if ((g_hMarkNavAreaAsBlocked = EndPrepSDKCall()) == null)
 		SetFailState("Failed to create SDKCall for CNavArea::MarkAsBlocked signature!");
 
-	StartPrepSDKCall(SDKCall_Raw);
-	PrepSDKCall_SetFromConf(hGameData, SDKConf_Signature, "SurvivorLegsRetreat::SurvivorLegsRetreat");
-	PrepSDKCall_AddParameter(SDKType_CBaseEntity, SDKPass_Pointer);
-	if ((g_hSurvivorLegsRetreat = EndPrepSDKCall()) == null)
-		SetFailState("Failed to create SDKCall for SurvivorLegsRetreat::SurvivorLegsRetreat signature!");
+	// Actions 4.x only accepts actions it registered, so the retreat is built through ActionConstructor instead of Allocate + SDKCall.
+	g_hSurvivorLegsRetreat = new ActionConstructor(0x745A);
+	if (!g_hSurvivorLegsRetreat.SignatureFromConf(hGameData, "SurvivorLegsRetreat::SurvivorLegsRetreat")
+		|| !g_hSurvivorLegsRetreat.AddParameter(ACType_Basic, ACPass_ByVal, g_entityEncoder)
+		|| !g_hSurvivorLegsRetreat.Finish())
+		SetFailState("Failed to create ActionConstructor for SurvivorLegsRetreat::SurvivorLegsRetreat signature!");
 
 	/*
 	StartPrepSDKCall(SDKCall_Raw);
@@ -7785,8 +7786,11 @@ Action OnRegroupWithTeamAction(BehaviorAction hAction, int iActor, float fInterv
 
 	if (iPathDangerous != 0 && IsTankInFleeRange(iActor))
 	{
+		BehaviorAction hRetreat = CreateSurvivorLegsRetreatAction(iPathDangerous);
+		if (hRetreat == INVALID_ACTION)return Plugin_Continue;
+
 		hResult.type = CHANGE_TO;
-		hResult.action = CreateSurvivorLegsRetreatAction(iPathDangerous);
+		hResult.action = hRetreat;
 		g_fSurvivorBot_TankFleeUntil[iActor] = GetGameTime() + BOT_TANK_FLEE_AIM_TIME;
 		return Plugin_Handled;
 	}
@@ -7815,8 +7819,11 @@ Action OnMoveToIncapacitatedFriendAction(BehaviorAction hAction, int iActor, flo
 
 	if (iPathDangerous != 0 && IsTankInFleeRange(iActor))
 	{
+		BehaviorAction hRetreat = CreateSurvivorLegsRetreatAction(iPathDangerous);
+		if (hRetreat == INVALID_ACTION)return Plugin_Continue;
+
 		hResult.type = CHANGE_TO;
-		hResult.action = CreateSurvivorLegsRetreatAction(iPathDangerous);
+		hResult.action = hRetreat;
 		g_fSurvivorBot_TankFleeUntil[iActor] = GetGameTime() + BOT_TANK_FLEE_AIM_TIME;
 		return Plugin_Handled;
 	}
@@ -7827,7 +7834,5 @@ Action OnMoveToIncapacitatedFriendAction(BehaviorAction hAction, int iActor, flo
 
 BehaviorAction CreateSurvivorLegsRetreatAction(int iThreat)
 {
-	BehaviorAction hAction = ActionsManager.Allocate(0x745A);
-	SDKCall(g_hSurvivorLegsRetreat, hAction, iThreat);
-	return hAction;
+	return g_hSurvivorLegsRetreat.Execute(iThreat);
 }
