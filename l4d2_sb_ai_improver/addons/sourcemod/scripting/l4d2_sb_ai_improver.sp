@@ -1367,7 +1367,9 @@ void CreateAllSDKCalls(Handle hGameData)
 		SetFailState("Failed to create SDKCall for CNavArea::MarkAsBlocked signature!");
 
 	// Actions 4.x only accepts actions it registered, so the retreat is built through ActionConstructor instead of Allocate + SDKCall.
-	g_hSurvivorLegsRetreat = new ActionConstructor(0x745A);
+	g_hSurvivorLegsRetreat = new ActionConstructor();
+	// Actions 4.x ignores the size passed to the constructor, so it is set through the property.
+	g_hSurvivorLegsRetreat.Size = 0x745A;
 	if (!g_hSurvivorLegsRetreat.SignatureFromConf(hGameData, "SurvivorLegsRetreat::SurvivorLegsRetreat")
 		|| !g_hSurvivorLegsRetreat.AddParameter(ACType_Basic, ACPass_ByVal, g_entityEncoder)
 		|| !g_hSurvivorLegsRetreat.Finish())
