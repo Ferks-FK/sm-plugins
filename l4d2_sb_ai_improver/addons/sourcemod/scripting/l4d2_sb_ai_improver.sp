@@ -1467,6 +1467,8 @@ public void OnClientDisconnect(int iClient)
 void ResetClientPluginVariables(int iClient)
 {
 	g_bBotProcessing_IsProcessed[iClient] = false;
+	// Only an AI infected sets this, and a player taking the slot later would inherit the old victim.
+	g_iInfectedBot_CurrentVictim[iClient] = 0;
 	g_fSurvivorBot_NextTankCoverSearchTime[iClient] = 0.0;
 	g_fSurvivorBot_NextTeamRegroupTime[iClient] = 0.0;
 	g_iSurvivorBot_RescueFriend[iClient] = 0;
@@ -2350,7 +2352,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 			DebugLog("client=%d(%N) TANK-CHECK tankTarget=%d(%N)", iClient, iClient, iTankTarget, iTankTarget);
 		}
 
-		int iVictim = g_iInfectedBot_CurrentVictim[iTankTarget];
+		int iVictim = GetTankChaseVictim(iTankTarget);
 		float fTankDist = GetClientDistance(iClient, iTankTarget, true);
 		float fHeightDist = (fTankDist + (g_fClientAbsOrigin[iClient][2] - g_fClientAbsOrigin[iTankTarget][2]));
 
@@ -2668,7 +2670,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 	// A closer common would win the target choice below, and one behind the bot fails the view cone check, so it would run from the tank without firing at all.
 	// Only with a gun or melee weapon in hand: holding a grenade, this aim would replace the arc of the throw.
 	// Independent of the target selection cvar, which also gives the same instant aim against every special infected.
-	bool bWantsTankAim = ((iCurWeapon == iWpnSlots[0] || iCurWeapon == iWpnSlots[1]) && !L4D_IsPlayerIncapacitated(iClient) && IsValidClient(iTankTarget) && (GetGameTime() < g_fSurvivorBot_TankFleeUntil[iClient] || GetGameTime() >= g_fSurvivorBot_RescueUntil[iClient] && GetClientDistance(iClient, iTankTarget, true) <= g_fCvar_TankFleeDistSqr || g_iInfectedBot_CurrentVictim[iTankTarget] == iClient && GetClientDistance(iClient, iTankTarget, true) <= (g_fCvar_TargetSelection_ShootRange*g_fCvar_TargetSelection_ShootRange)));
+	bool bWantsTankAim = ((iCurWeapon == iWpnSlots[0] || iCurWeapon == iWpnSlots[1]) && !L4D_IsPlayerIncapacitated(iClient) && IsValidClient(iTankTarget) && (GetGameTime() < g_fSurvivorBot_TankFleeUntil[iClient] || GetGameTime() >= g_fSurvivorBot_RescueUntil[iClient] && GetClientDistance(iClient, iTankTarget, true) <= g_fCvar_TankFleeDistSqr || GetTankChaseVictim(iTankTarget) == iClient && GetClientDistance(iClient, iTankTarget, true) <= (g_fCvar_TargetSelection_ShootRange*g_fCvar_TargetSelection_ShootRange)));
 	bool bFleeingTank = (bWantsTankAim && IsTankVisibleCached(iClient, iTankTarget));
 	if (bFleeingTank)g_fSurvivorBot_TankLastSeenTime[iClient] = GetGameTime();
 
@@ -3300,7 +3302,7 @@ bool IsThreatenedByTank(int iClient)
 		if (!IsSpecialInfected(i) || L4D2_GetPlayerZombieClass(i) != L4D2ZombieClass_Tank || L4D_IsPlayerIncapacitated(i))
 			continue;
 
-		if (g_iInfectedBot_CurrentVictim[i] == iClient || GetClientDistance(i, iClient, true) <= BOT_TANK_KEEP_AWAY_DIST_SQR)
+		if (GetTankChaseVictim(i) == iClient || GetClientDistance(i, iClient, true) <= BOT_TANK_KEEP_AWAY_DIST_SQR)
 			return true;
 	}
 	return false;
@@ -3386,7 +3388,7 @@ bool CanRescueFriendFromTank(int iBot, int iFriend)
 		if (!IsSpecialInfected(i) || L4D2_GetPlayerZombieClass(i) != L4D2ZombieClass_Tank || L4D_IsPlayerIncapacitated(i))
 			continue;
 
-		if (g_iInfectedBot_CurrentVictim[i] == iBot)
+		if (GetTankChaseVictim(i) == iBot)
 			return DenyTankRescue(iBot, iFriend, "tank is after this bot");
 
 		if (GetClientDistance(i, iBot, true) <= fMinTankDist)
@@ -3418,8 +3420,8 @@ bool CanRescueFriendFromTank(int iBot, int iFriend)
 				continue;
 			}
 
-			// A bot being chased can't take the rescue, so it must not hold the others back either.
-			if (GetClientDistance(i, iFriend, true) < fFriendDist && !IsBotChasedByTank(i))
+			// A bot being chased or with a tank next to it can't take the rescue, so it must not hold the others back either.
+			if (GetClientDistance(i, iFriend, true) < fFriendDist && !IsThreatenedByTank(i))
 				return DenyTankRescue(iBot, iFriend, "another bot is closer");
 		}
 
@@ -3429,16 +3431,6 @@ bool CanRescueFriendFromTank(int iBot, int iFriend)
 	g_iSurvivorBot_RescueFriend[iBot] = iFriend;
 	g_fSurvivorBot_RescueUntil[iBot] = fNow + 1.0;
 	return true;
-}
-
-bool IsBotChasedByTank(int iBot)
-{
-	for (int i = 1; i <= MaxClients; i++)
-	{
-		if (IsSpecialInfected(i) && L4D2_GetPlayerZombieClass(i) == L4D2ZombieClass_Tank && !L4D_IsPlayerIncapacitated(i) && g_iInfectedBot_CurrentVictim[i] == iBot)
-			return true;
-	}
-	return false;
 }
 
 // Checked from the think too: the retreat command issued there can keep the game's own rescue action from ever starting.
@@ -3451,7 +3443,22 @@ bool IsRescuingFriendFromTank(int iClient)
 
 // A player-controlled tank never goes through L4D2_OnChooseVictim, and the AI's choice can be someone it already downed.
 // Both fall back to the standing survivor closest to the tank.
+// Every reader of a tank's victim goes through here; the path danger check calls it once per nav area of a path, hence the per-tick cache.
+static int g_iTankChaseVictim[MAXPLAYERS+1];
+static int g_iTankChaseVictim_Tick[MAXPLAYERS+1] = {-1, ...};
+
 int GetTankChaseVictim(int iTank)
+{
+	int iTick = GetGameTickCount();
+	if (g_iTankChaseVictim_Tick[iTank] != iTick)
+	{
+		g_iTankChaseVictim_Tick[iTank] = iTick;
+		g_iTankChaseVictim[iTank] = FindTankChaseVictim(iTank);
+	}
+	return g_iTankChaseVictim[iTank];
+}
+
+int FindTankChaseVictim(int iTank)
 {
 	int iVictim = g_iInfectedBot_CurrentVictim[iTank];
 	if (IsFakeClient(iTank) && IsClientSurvivor(iVictim) && !L4D_IsPlayerIncapacitated(iVictim))
@@ -7526,7 +7533,7 @@ MRESReturn DTR_OnSurvivorBotGetAvoidRange(int iClient, Handle hReturn, Handle hP
 		}
 		else
 		{
-			int iVictim = g_iInfectedBot_CurrentVictim[iTarget];
+			int iVictim = GetTankChaseVictim(iTarget);
 			fAvoidRange = ((iVictim == iClient || iVictim > 0 && GetClientDistance(iVictim, iClient, true) <= 160000.0) ? 700.0 : 300.0);
 
 			// The retreat action ends itself outside the flee range, so the game would keep starting it.
@@ -7665,7 +7672,7 @@ int LBI_IsPathToPositionDangerous_Compute(int iClient, float fGoalPos[3])
 			{
 				// No path is shorter than the straight line, so a tank beyond the longest distance below needs no search, and one with no path is no closer.
 				fTankDist = (GetClientDistance(i, iClient, true) > BOT_TANK_PATH_NEAR_DIST_SQR ? -1.0 : GetClientTravelDistance(i, g_fClientAbsOrigin[iClient], true, BOT_TANK_PATH_NEAR_SEARCH_MAX));
-				if (fTankDist != -1.0 && (fTankDist <= 62500.0 || fTankDist <= BOT_TANK_PATH_NEAR_DIST_SQR && g_iInfectedBot_CurrentVictim[i] == iClient && IsVisibleEntity(iClient, i, MASK_VISIBLE_AND_NPCS)))
+				if (fTankDist != -1.0 && (fTankDist <= 62500.0 || fTankDist <= BOT_TANK_PATH_NEAR_DIST_SQR && GetTankChaseVictim(i) == iClient && IsVisibleEntity(iClient, i, MASK_VISIBLE_AND_NPCS)))
 				{
 					delete hTankList;
 					return i;
@@ -7709,11 +7716,11 @@ int LBI_IsPathToPositionDangerous_Compute(int iClient, float fGoalPos[3])
 					if (g_iClientNavArea[iTank] != iParent)
 					{
 						LBI_GetClosestPointOnNavArea(iParent, g_fClientAbsOrigin[iTank], fAreaPos);
-						if (g_iInfectedBot_CurrentVictim[iTank] != iClient && GetVectorDistance(g_fClientAbsOrigin[iTank], fAreaPos, true) > 22500.0)continue;
+						if (GetTankChaseVictim(iTank) != iClient && GetVectorDistance(g_fClientAbsOrigin[iTank], fAreaPos, true) > 22500.0)continue;
 					}
 
 					delete hTankList;
-					return (g_iInfectedBot_CurrentVictim[iTank] == iClient ? iTank : 0);
+					return (GetTankChaseVictim(iTank) == iClient ? iTank : 0);
 				}
 			}
 		}
