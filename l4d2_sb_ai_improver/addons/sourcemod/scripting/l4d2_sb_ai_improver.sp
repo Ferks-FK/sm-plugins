@@ -545,6 +545,9 @@ static int g_iTeamAnchor;
 static int g_iTeamAnchor_Tick = -1;
 
 static int g_iSurvivorBot_RescueFriend[MAXPLAYERS+1];
+static int g_iSurvivorBot_RescueReachArea[MAXPLAYERS+1];
+static float g_fSurvivorBot_RescueReachUntil[MAXPLAYERS+1];
+static bool g_bSurvivorBot_RescueReachable[MAXPLAYERS+1];
 static float g_fSurvivorBot_RescueUntil[MAXPLAYERS+1];
 static bool g_bSurvivorBot_RetreatCommanded[MAXPLAYERS+1];
 static float g_fSurvivorBot_NextRetreatTime[MAXPLAYERS+1];
@@ -1469,6 +1472,7 @@ void ResetClientPluginVariables(int iClient)
 	g_bBotProcessing_IsProcessed[iClient] = false;
 	// Only an AI infected sets this, and a player taking the slot later would inherit the old victim.
 	g_iInfectedBot_CurrentVictim[iClient] = 0;
+	g_fSurvivorBot_RescueReachUntil[iClient] = 0.0;
 	g_fSurvivorBot_NextTankCoverSearchTime[iClient] = 0.0;
 	g_fSurvivorBot_NextTeamRegroupTime[iClient] = 0.0;
 	g_iSurvivorBot_RescueFriend[iClient] = 0;
@@ -3403,7 +3407,7 @@ bool CanRescueFriendFromTank(int iBot, int iFriend)
 	if (bFarFriend && LBI_IsPathToPositionDangerous(iBot, g_fClientAbsOrigin[iFriend], LBI_PDSLOT_RESCUE) != -1)
 		return DenyTankRescue(iBot, iFriend, "far friend and tank on the path");
 
-	if (bFarFriend && (!g_iClientNavArea[iFriend] || !LBI_IsReachableNavArea(iBot, g_iClientNavArea[iFriend])))
+	if (bFarFriend && !IsRescueAreaReachable(iBot, g_iClientNavArea[iFriend]))
 		return DenyTankRescue(iBot, iFriend, "far friend out of reach");
 
 	if (!bOngoing)
@@ -3431,6 +3435,25 @@ bool CanRescueFriendFromTank(int iBot, int iFriend)
 	g_iSurvivorBot_RescueFriend[iBot] = iFriend;
 	g_fSurvivorBot_RescueUntil[iBot] = fNow + 1.0;
 	return true;
+}
+
+// The rescue check runs on every tick of every bot while a tank is alive, and IsReachable is a full path search in the game.
+// A downed friend doesn't move, so the answer for its area holds for a while.
+#define BOT_RESCUE_REACH_CACHE_TIME	0.5
+
+bool IsRescueAreaReachable(int iBot, int iArea)
+{
+	if (!iArea)
+		return false;
+
+	float fNow = GetGameTime();
+	if (iArea != g_iSurvivorBot_RescueReachArea[iBot] || fNow >= g_fSurvivorBot_RescueReachUntil[iBot])
+	{
+		g_iSurvivorBot_RescueReachArea[iBot] = iArea;
+		g_fSurvivorBot_RescueReachUntil[iBot] = fNow + BOT_RESCUE_REACH_CACHE_TIME;
+		g_bSurvivorBot_RescueReachable[iBot] = LBI_IsReachableNavArea(iBot, iArea);
+	}
+	return g_bSurvivorBot_RescueReachable[iBot];
 }
 
 // Checked from the think too: the retreat command issued there can keep the game's own rescue action from ever starting.
