@@ -25,7 +25,8 @@ public Plugin myinfo =
 #define BOT_WITCH_CHECK_DIST_SQR		4000000.0
 #define BOT_BOOMER_AVOID_RADIUS_SQR		40000.0
 #define BOT_GRENADE_CHECK_RADIUS_SQR	90000.0
-#define BOT_TANK_KEEP_AWAY_DIST_SQR		147456.0
+#define BOT_TANK_KEEP_AWAY_DIST			384.0
+#define BOT_TANK_KEEP_AWAY_DIST_SQR		(BOT_TANK_KEEP_AWAY_DIST*BOT_TANK_KEEP_AWAY_DIST)
 #define BOT_TANK_CHASE_DIST_SQR			2250000.0
 #define BOT_TANK_SUPPORT_CLOSE_DIST_SQR	40000.0
 #define BOT_CMD_MOVE_INTERVAL 		0.8
@@ -79,10 +80,10 @@ public Plugin myinfo =
 #define BOT_TANK_ROUTE_MOVE_NAME	"TankFleeRoute"
 #define BOT_TANK_BLIND_MOVE_NAME	"TankFleeBlind"
 #define BOT_TANK_FLEE_STOP_MARGIN	50.0
-#define BOT_TANK_KEEP_AWAY_STOP_DIST_SQR	188356.0
+#define BOT_TANK_KEEP_AWAY_STOP_DIST_SQR	((BOT_TANK_KEEP_AWAY_DIST+BOT_TANK_FLEE_STOP_MARGIN)*(BOT_TANK_KEEP_AWAY_DIST+BOT_TANK_FLEE_STOP_MARGIN))
 
 #define HUMAN_HEIGHT				71.0
-#define HUMAN_HALF_HEIGHT			35.5
+#define HUMAN_HALF_HEIGHT			(HUMAN_HEIGHT*0.5)
 
 enum
 {
@@ -2509,7 +2510,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 
 				// Only the two ranges below use the sight, and an angered witch can be anywhere on the map.
 				bool bInShootRange = (fWitchDist <= (fShootRange*fShootRange));
-				bool bWitchVisible = ((bInShootRange || fWitchDist <= 4000000.0) && HasVisualContactWithEntity(iClient, iWitchTarget, false));
+				bool bWitchVisible = ((bInShootRange || fWitchDist <= BOT_WITCH_CHECK_DIST_SQR) && HasVisualContactWithEntity(iClient, iWitchTarget, false));
 				if (bInShootRange && bWitchVisible)
 				{
 					GetTargetAimPart(iClient, iWitchTarget, fFirePos);
@@ -2522,7 +2523,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 						ClearMoveToPosition(iClient, "GoToWitch");
 					}
 				}
-				else if (iWitchHarasser != iClient && fWitchDist <= 4000000.0 && GetGameTime() > g_fSurvivorBot_NextWitchMoveUpdateTime[iClient])
+				else if (iWitchHarasser != iClient && fWitchDist <= BOT_WITCH_CHECK_DIST_SQR && GetGameTime() > g_fSurvivorBot_NextWitchMoveUpdateTime[iClient])
 				{
 					g_fSurvivorBot_NextWitchMoveUpdateTime[iClient] = GetGameTime() + 1.0;
 					SetMoveToPosition(iClient, fWitchOrigin, 3, "GoToWitch", 0.0, ((bWitchVisible && !L4D_IsPlayerIncapacitated(iWitchHarasser)) ? (fShootRange > 192.0 ? 192.0 : fShootRange) : 0.0), true);
