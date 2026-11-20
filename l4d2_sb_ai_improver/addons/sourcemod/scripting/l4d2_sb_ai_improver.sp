@@ -77,6 +77,7 @@ public Plugin myinfo =
 #define BOT_TANK_RESCUE_FAR_RANGE_MULT_SQR	4.0
 #define BOT_TANK_ROUTE_FLIP_MARGIN	150.0
 #define BOT_TANK_ROUTE_MOVE_NAME	"TankFleeRoute"
+#define BOT_TANK_BLIND_MOVE_NAME	"TankFleeBlind"
 #define BOT_TANK_FLEE_STOP_MARGIN	50.0
 #define BOT_TANK_KEEP_AWAY_STOP_DIST_SQR	188356.0
 
@@ -466,7 +467,7 @@ static float g_fSurvivorBot_TimeSinceLeftLadder[MAXPLAYERS+1];
 // The cooldown depends on what the result does, not on its value:
 //   -1 -> Plugin_Continue: no interference, can stay cached longer
 //    0 -> hResult DONE: the bot ABANDONS the action and stands still
-//   >0 -> CHANGE_TO retreat: the bot backs off
+//   >0 -> retreat in regroup (SUSPEND_FOR), ends the rescue: the bot backs off
 // The last two block the bot, so they must expire quickly.
 #define LBI_PATHDANGER_COOLDOWN   0.35    // neutral result (-1)
 #define LBI_PATHDANGER_CD_BLOCK   0.12    // blocking result (0 or >0)
@@ -553,11 +554,19 @@ static bool g_bSurvivorBot_RetreatCommanded[MAXPLAYERS+1];
 static float g_fSurvivorBot_NextRetreatTime[MAXPLAYERS+1];
 static int g_iDebug_RetreatActionCount[MAXPLAYERS+1];
 static float g_fDebug_NextRetreatActionLogTime[MAXPLAYERS+1];
+static int g_iDebug_RegroupSuspendCount[MAXPLAYERS+1];
+static float g_fDebug_NextRegroupSuspendLogTime[MAXPLAYERS+1];
+static int g_iDebug_RegroupResumeCount[MAXPLAYERS+1];
+static float g_fDebug_NextRegroupResumeLogTime[MAXPLAYERS+1];
 static float g_fDebug_NextRetreatStopLogTime[MAXPLAYERS+1];
 static float g_fDebug_NextRescueLogTime[MAXPLAYERS+1];
 static float g_fDebug_NextRescueAbandonLogTime[MAXPLAYERS+1];
 
 static bool g_bSurvivorBot_MovePos_AreasCached[MAXPLAYERS+1];
+static int g_iSurvivorBot_MovePosReach_Start[MAXPLAYERS+1];
+static int g_iSurvivorBot_MovePosReach_Goal[MAXPLAYERS+1];
+static float g_fSurvivorBot_MovePosReach_Until[MAXPLAYERS+1];
+static bool g_bSurvivorBot_MovePosReach_Result[MAXPLAYERS+1];
 static int g_iSurvivorBot_MovePos_Area[MAXPLAYERS+1];
 static int g_iSurvivorBot_MovePos_ReachArea[MAXPLAYERS+1];
 
@@ -1367,13 +1376,10 @@ void CreateAllSDKCalls(Handle hGameData)
 		SetFailState("Failed to create SDKCall for CNavArea::MarkAsBlocked signature!");
 
 	// Actions 4.x only accepts actions it registered, so the retreat is built through ActionConstructor instead of Allocate + SDKCall.
-	g_hSurvivorLegsRetreat = new ActionConstructor();
-	// Actions 4.x ignores the size passed to the constructor, so it is set through the property.
-	g_hSurvivorLegsRetreat.Size = 0x745A;
-	if (!g_hSurvivorLegsRetreat.SignatureFromConf(hGameData, "SurvivorLegsRetreat::SurvivorLegsRetreat")
-		|| !g_hSurvivorLegsRetreat.AddParameter(ACType_Basic, ACPass_ByVal, g_entityEncoder)
-		|| !g_hSurvivorLegsRetreat.Finish())
-		SetFailState("Failed to create ActionConstructor for SurvivorLegsRetreat::SurvivorLegsRetreat signature!");
+	// The extension drops the size given to new ActionConstructor() and does not register the Size setter, so size and params come from the gamedata.
+	g_hSurvivorLegsRetreat = ActionConstructor.SetupFromConf(hGameData, "SBAI_SurvivorLegsRetreat");
+	if (g_hSurvivorLegsRetreat == null)
+		SetFailState("Failed to create ActionConstructor \"SBAI_SurvivorLegsRetreat\" from gamedata!");
 
 	/*
 	StartPrepSDKCall(SDKCall_Raw);
@@ -1475,6 +1481,7 @@ void ResetClientPluginVariables(int iClient)
 	// Only an AI infected sets this, and a player taking the slot later would inherit the old victim.
 	g_iInfectedBot_CurrentVictim[iClient] = 0;
 	g_fSurvivorBot_RescueReachUntil[iClient] = 0.0;
+	g_fSurvivorBot_MovePosReach_Until[iClient] = 0.0;
 	g_fSurvivorBot_NextTankCoverSearchTime[iClient] = 0.0;
 	g_fSurvivorBot_NextTeamRegroupTime[iClient] = 0.0;
 	g_iSurvivorBot_RescueFriend[iClient] = 0;
@@ -1508,6 +1515,10 @@ void ResetClientPluginVariables(int iClient)
 	g_fSurvivorBot_TankAimSightUntil[iClient] = 0.0;
 	g_iDebug_RetreatActionCount[iClient] = 0;
 	g_fDebug_NextRetreatActionLogTime[iClient] = 0.0;
+	g_iDebug_RegroupSuspendCount[iClient] = 0;
+	g_fDebug_NextRegroupSuspendLogTime[iClient] = 0.0;
+	g_iDebug_RegroupResumeCount[iClient] = 0;
+	g_fDebug_NextRegroupResumeLogTime[iClient] = 0.0;
 	g_fDebug_NextRetreatStopLogTime[iClient] = 0.0;
 	g_fDebug_NextRescueLogTime[iClient] = 0.0;
 	g_fDebug_NextRescueAbandonLogTime[iClient] = 0.0;
@@ -2369,6 +2380,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 			ClearMoveToPosition(iClient, "RegroupTeam");
 			ClearMoveToPosition(iClient, "SupportChased", "rescuing");
 			ClearMoveToPosition(iClient, BOT_TANK_ROUTE_MOVE_NAME, "rescuing");
+			ClearMoveToPosition(iClient, BOT_TANK_BLIND_MOVE_NAME, "rescuing");
 			g_bSurvivorBot_SupportingVictim[iClient] = false;
 			g_fSurvivorBot_TankFleeUntil[iClient] = 0.0;
 
@@ -2405,14 +2417,26 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 			{
 				ClearMoveToPosition(iClient, "TakeCover");	
 			}
+			if (bTankVisible)
+			{
+				ClearMoveToPosition(iClient, BOT_TANK_BLIND_MOVE_NAME, "tank in sight");
+			}
 			if (!L4D_IsPlayerIncapacitated(iClient) && (fTankDist <= BOT_TANK_KEEP_AWAY_DIST_SQR || fTankDist <= (bTankVisible ? g_fCvar_TankFleeDistSqr : g_fCvar_TankFleeBlindDistSqr)))
 			{
 				// Repeating this every think keeps replacing the retreat action.
 				if (!TryFleeAlongMapRoute(iClient, iTankTarget) && GetGameTime() >= g_fSurvivorBot_NextRetreatTime[iClient])
 				{
 					g_fSurvivorBot_NextRetreatTime[iClient] = GetGameTime() + BOT_TANK_RETREAT_INTERVAL;
-					L4D2_CommandABot(iClient, iTankTarget, BOT_CMD_RETREAT);
-					g_bSurvivorBot_RetreatCommanded[iClient] = true;
+					if (bTankVisible)
+					{
+						L4D2_CommandABot(iClient, iTankTarget, BOT_CMD_RETREAT);
+						g_bSurvivorBot_RetreatCommanded[iClient] = true;
+					}
+					// The game drops a retreat from a threat out of its sight on the first update, so move out of the tank's sight instead.
+					else if (strcmp(g_sSurvivorBot_MovePos_Name[iClient], BOT_TANK_BLIND_MOVE_NAME) != 0)
+					{
+						TakeCoverFromEntity(iClient, iTankTarget, 768.0, (g_fCvar_TankTeamLeash > 0.0), BOT_TANK_BLIND_MOVE_NAME);
+					}
 				}
 				if (g_bCvar_Debug && GetGameTime() >= g_fSurvivorBot_TankFleeUntil[iClient])DebugLog("client=%d(%N) TANK-FLEE-START tank=%d dist=%.1f visible=%d", iClient, iClient, iTankTarget, SquareRoot(fTankDist), bTankVisible);
 				g_fSurvivorBot_TankFleeUntil[iClient] = GetGameTime() + BOT_TANK_FLEE_AIM_TIME;
@@ -2438,6 +2462,7 @@ void SurvivorBotThink(int iClient, int &iButtons, int iWpnSlots[6])
 			ClearMoveToPosition(iClient, "RegroupTeam");
 			ClearMoveToPosition(iClient, "SupportChased", "rescuing");
 			ClearMoveToPosition(iClient, BOT_TANK_ROUTE_MOVE_NAME, "rescuing");
+			ClearMoveToPosition(iClient, BOT_TANK_BLIND_MOVE_NAME, "rescuing");
 			g_bSurvivorBot_SupportingVictim[iClient] = false;
 		}
 		else
@@ -3637,6 +3662,11 @@ void UpdateTankRetreat(int iClient)
 		if (g_bCvar_Debug && strcmp(g_sSurvivorBot_MovePos_Name[iClient], BOT_TANK_ROUTE_MOVE_NAME) != 0)DebugLog("client=%d(%N) TANK-FLEE-STOP source=route", iClient, iClient);
 	}
 
+	if (strcmp(g_sSurvivorBot_MovePos_Name[iClient], BOT_TANK_BLIND_MOVE_NAME) == 0 && (L4D_IsPlayerIncapacitated(iClient) || !IsTankInFleeRange(iClient, true)))
+	{
+		ClearMoveToPosition(iClient, BOT_TANK_BLIND_MOVE_NAME, "flee ended");
+	}
+
 	if (!g_bSurvivorBot_RetreatCommanded[iClient])
 		return;
 
@@ -3923,7 +3953,7 @@ bool TryRegroupWithTeam(int iClient)
 	return (strcmp(g_sSurvivorBot_MovePos_Name[iClient], "RegroupTeam") == 0);
 }
 
-bool TakeCoverFromPosition(int iClient, float fPosition[3], float fSearchDist = 384.0, bool bStayNearTeam = false)
+bool TakeCoverFromPosition(int iClient, float fPosition[3], float fSearchDist = 384.0, bool bStayNearTeam = false, const char[] sMoveName = "TakeCover")
 {
 	// SetMoveToPosition would discard the result, so don't spend VScript calls looking for one.
 	if (!CanSetMoveToPosition(iClient, 3))
@@ -3948,20 +3978,20 @@ bool TakeCoverFromPosition(int iClient, float fPosition[3], float fSearchDist = 
 		if (fDot > 0.2 || GetVectorVisible(fPosition, fPathOffset))continue;
 
 		// It can still refuse the move, and reporting success would make the caller search again on the next tick.
-		SetMoveToPosition(iClient, fPathPos, 3, "TakeCover");
-		if (strcmp(g_sSurvivorBot_MovePos_Name[iClient], "TakeCover") == 0)
+		SetMoveToPosition(iClient, fPathPos, 3, sMoveName);
+		if (strcmp(g_sSurvivorBot_MovePos_Name[iClient], sMoveName) == 0)
 			return true;
 	}
 
 	return false;
 }
 
-bool TakeCoverFromEntity(int iClient, int iEntity, float fSearchDist = 384.0, bool bStayNearTeam = false)
+bool TakeCoverFromEntity(int iClient, int iEntity, float fSearchDist = 384.0, bool bStayNearTeam = false, const char[] sMoveName = "TakeCover")
 {
 	float fEntityPos[3];
 	if (IsValidClient(iEntity))GetClientEyePosition(iEntity, fEntityPos);
 	else GetEntityCenteroid(iEntity, fEntityPos);
-	return (TakeCoverFromPosition(iClient, fEntityPos, fSearchDist, bStayNearTeam));
+	return (TakeCoverFromPosition(iClient, fEntityPos, fSearchDist, bStayNearTeam, sMoveName));
 }
 
 /*static float g_fSurvivorBot_UpdateRetreatPosTime[MAXPLAYERS+1];
@@ -4043,10 +4073,26 @@ bool IsMovePosDamaging(int iClient)
 	return (g_iSurvivorBot_MovePos_Area[iClient] && LBI_IsDamagingNavArea(g_iSurvivorBot_MovePos_Area[iClient]));
 }
 
+// Checked on every tick of a bot with a move order, and IsReachable is a full path search in the game.
+// The answer only changes when the bot changes area or the goal moves, so it holds for a moment.
+#define BOT_MOVEPOS_REACH_CACHE_TIME	0.5
+
 bool IsMovePosReachable(int iClient)
 {
 	CacheMovePosAreas(iClient);
-	return (g_iSurvivorBot_MovePos_ReachArea[iClient] && LBI_IsReachableNavArea(iClient, g_iSurvivorBot_MovePos_ReachArea[iClient]));
+	int iGoal = g_iSurvivorBot_MovePos_ReachArea[iClient];
+	if (!iGoal)return false;
+
+	int iStart = g_iClientNavArea[iClient];
+	float fNow = GetGameTime();
+	if (iStart != g_iSurvivorBot_MovePosReach_Start[iClient] || iGoal != g_iSurvivorBot_MovePosReach_Goal[iClient] || fNow >= g_fSurvivorBot_MovePosReach_Until[iClient])
+	{
+		g_iSurvivorBot_MovePosReach_Start[iClient] = iStart;
+		g_iSurvivorBot_MovePosReach_Goal[iClient] = iGoal;
+		g_fSurvivorBot_MovePosReach_Until[iClient] = fNow + BOT_MOVEPOS_REACH_CACHE_TIME;
+		g_bSurvivorBot_MovePosReach_Result[iClient] = LBI_IsReachableNavArea(iClient, iGoal);
+	}
+	return g_bSurvivorBot_MovePosReach_Result[iClient];
 }
 
 void SetMoveToPosition(int iClient, float fMovePos[3], int iPriority, const char[] sName = "", float fAddDuration = 0.66, float fDistTolerance = -1.0, bool bIgnoreDamaging = false, bool bIgnoreCheckpoints = false)
@@ -7552,7 +7598,7 @@ MRESReturn DTR_OnSurvivorBotGetAvoidRange(int iClient, Handle hReturn, Handle hP
 	else if (fAvoidRange == 450.0)
 	{
 		// Otherwise the game starts a retreat that gets ended right away, running its path search on every tick.
-		if (L4D_IsPlayerIncapacitated(iClient) || strcmp(g_sSurvivorBot_MovePos_Name[iClient], BOT_TANK_ROUTE_MOVE_NAME) == 0)
+		if (L4D_IsPlayerIncapacitated(iClient) || strcmp(g_sSurvivorBot_MovePos_Name[iClient], BOT_TANK_ROUTE_MOVE_NAME) == 0 || strcmp(g_sSurvivorBot_MovePos_Name[iClient], BOT_TANK_BLIND_MOVE_NAME) == 0)
 		{
 			fAvoidRange = 0.0;
 		}
@@ -7767,6 +7813,7 @@ public void OnActionCreated(BehaviorAction hAction, int iActor, const char[] sNa
 	if (strcmp(sName[8], "LegsRegroup") == 0)
 	{
 		hAction.OnUpdatePost = OnRegroupWithTeamAction;
+		hAction.OnResume = OnRegroupWithTeamResume;
 	}
 	else if (strcmp(sName[8], "LiberateBesiegedFriend") == 0)
 	{
@@ -7816,19 +7863,48 @@ Action OnRegroupWithTeamAction(BehaviorAction hAction, int iActor, float fInterv
 	int iPathDangerous = LBI_IsPathToPositionDangerous(iActor, g_fClientAbsOrigin[iLeader]);
 	if (iPathDangerous == -1)return Plugin_Continue;
 
-	if (iPathDangerous != 0 && IsTankInFleeRange(iActor))
+	// The game ends a retreat whose threat has been out of sight for 1s, and a new one counts as never seen,
+	// so one started against an unseen tank dies on its first update and gets rebuilt every tick.
+	if (iPathDangerous != 0 && IsTankInFleeRange(iActor) && IsTankVisibleCached(iActor, iPathDangerous))
 	{
 		BehaviorAction hRetreat = CreateSurvivorLegsRetreatAction(iPathDangerous);
 		if (hRetreat == INVALID_ACTION)return Plugin_Continue;
 
-		hResult.type = CHANGE_TO;
+		// Regroup is a legs action, so suspending it puts the retreat on top in the same legs behavior,
+		// and the regroup resumes when the retreat is done instead of being thrown away.
+		hResult.type = SUSPEND_FOR;
 		hResult.action = hRetreat;
+		if (g_bCvar_Debug)
+		{
+			g_iDebug_RegroupSuspendCount[iActor]++;
+			if (GetGameTime() >= g_fDebug_NextRegroupSuspendLogTime[iActor])
+			{
+				g_fDebug_NextRegroupSuspendLogTime[iActor] = GetGameTime() + 1.0;
+				DebugLog("client=%d(%N) LEGS-REGROUP-SUSPEND leader=%d(%N) threat=%d count=%d", iActor, iActor, iLeader, iLeader, iPathDangerous, g_iDebug_RegroupSuspendCount[iActor]);
+				g_iDebug_RegroupSuspendCount[iActor] = 0;
+			}
+		}
 		g_fSurvivorBot_TankFleeUntil[iActor] = GetGameTime() + BOT_TANK_FLEE_AIM_TIME;
 		return Plugin_Handled;
 	}
 
 	hResult.type = DONE;
 	return Plugin_Changed;
+}
+
+// Only logs: proves that the regroup comes back after a retreat it was suspended for.
+Action OnRegroupWithTeamResume(BehaviorAction hAction, int iActor, BehaviorAction hInterrupting, ActionResult hResult)
+{
+	if (!g_bCvar_Debug || !IsValidClient(iActor))return Plugin_Continue;
+
+	g_iDebug_RegroupResumeCount[iActor]++;
+	if (GetGameTime() >= g_fDebug_NextRegroupResumeLogTime[iActor])
+	{
+		g_fDebug_NextRegroupResumeLogTime[iActor] = GetGameTime() + 1.0;
+		DebugLog("client=%d(%N) LEGS-REGROUP-RESUME count=%d", iActor, iActor, g_iDebug_RegroupResumeCount[iActor]);
+		g_iDebug_RegroupResumeCount[iActor] = 0;
+	}
+	return Plugin_Continue;
 }
 
 Action OnMoveToIncapacitatedFriendAction(BehaviorAction hAction, int iActor, float fInterval, ActionResult hResult)
@@ -7849,17 +7925,8 @@ Action OnMoveToIncapacitatedFriendAction(BehaviorAction hAction, int iActor, flo
 		DebugLog("client=%d(%N) RESCUE-ABANDONED friend=%d(%N) pathResult=%d", iActor, iActor, iFriend, iFriend, iPathDangerous);
 	}
 
-	if (iPathDangerous != 0 && IsTankInFleeRange(iActor))
-	{
-		BehaviorAction hRetreat = CreateSurvivorLegsRetreatAction(iPathDangerous);
-		if (hRetreat == INVALID_ACTION)return Plugin_Continue;
-
-		hResult.type = CHANGE_TO;
-		hResult.action = hRetreat;
-		g_fSurvivorBot_TankFleeUntil[iActor] = GetGameTime() + BOT_TANK_FLEE_AIM_TIME;
-		return Plugin_Handled;
-	}
-
+	// A retreat here would run a legs action in the main behavior while the legs stack keeps moving the bot.
+	// Ending the rescue pops its approach, and the bot's own tank flee takes over in the legs.
 	hResult.type = DONE;
 	return Plugin_Changed;
 }
